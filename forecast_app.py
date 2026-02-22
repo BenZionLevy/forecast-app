@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 # =========================
-# עיצוב בהיר מקצועי
+# עיצוב בהיר מקצועי (מתוקן לימין)
 # =========================
 st.markdown("""
 <style>
@@ -41,6 +41,8 @@ html, body, [class*="css"] {
     border-radius:8px;
     margin-bottom:1rem;
     font-size:0.9rem;
+    text-align: right;
+    direction: rtl;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -111,13 +113,13 @@ with col2:
 
 mode = st.radio(
     "סוג חיזוי",
-    ["חיזוי עתידי (מהיום והלאה)", "בדיקה היסטורית (Backtesting)"],
+    ["חיזוי עתידי (מהיום והלאה)", "בדיקה היסטורית בודדת למחקר ממוקד"],
     horizontal=True
 )
 
 cutoff = 0
 
-if mode == "בדיקה היסטורית (Backtesting)":
+if mode == "בדיקה היסטורית בודדת למחקר ממוקד":
     st.info("💡 בחר כמה נרות (תצפיות) להסתיר מהמודל כדי לבחון את הדיוק שלו מול מה שקרה בפועל.")
     cutoff = st.number_input("כמה נרות לחזור אחורה אל תוך העבר?", min_value=1, max_value=128, value=30)
 
@@ -170,7 +172,7 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
         train = df
         actual = pd.DataFrame()
 
-    with st.spinner("ה-AI מנתח תבניות היסטוריות ומחשב תחזית לעתיד..."):
+    with st.spinner("ה-AI מנתח תבניות היסטוריות ומחשב תחזית..."):
         forecast, quant = model.forecast([train['close'].values], freq=[0])
         forecast = forecast[0]
         lower = quant[0, :, 0]
@@ -193,43 +195,29 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
     conn_upper = [last_price] + list(upper)
 
     # =========================
-    # ויזואליזציה (גרפים)
+    # ויזואליזציה (גרף מרכזי)
     # =========================
     fig = go.Figure()
 
     fig.add_trace(go.Scatter(
-        x=train.index[-200:],
-        y=train['close'].tail(200),
-        mode="lines",
-        name="היסטוריה (בסיס לחיזוי)",
-        line=dict(color='#2563eb', width=2)
+        x=train.index[-200:], y=train['close'].tail(200),
+        mode="lines", name="היסטוריה (בסיס לחיזוי)", line=dict(color='#2563eb', width=2)
     ))
 
     fig.add_trace(go.Scatter(
-        x=conn_dates,
-        y=conn_upper,
-        mode="lines",
-        line=dict(width=0),
-        showlegend=False,
-        hoverinfo='skip'
+        x=conn_dates, y=conn_upper,
+        mode="lines", line=dict(width=0), showlegend=False, hoverinfo='skip'
     ))
 
     fig.add_trace(go.Scatter(
-        x=conn_dates,
-        y=conn_lower,
-        mode="lines",
-        fill="tonexty",
-        fillcolor="rgba(245, 158, 11, 0.2)",
-        line=dict(width=0),
-        name="טווח הסתברות (AI)"
+        x=conn_dates, y=conn_lower,
+        mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)",
+        line=dict(width=0), name="טווח הסתברות (AI)"
     ))
 
     fig.add_trace(go.Scatter(
-        x=conn_dates,
-        y=conn_forecast,
-        mode="lines",
-        name="תחזית AI עתידית",
-        line=dict(color='#f59e0b', width=2.5, dash="dash")
+        x=conn_dates, y=conn_forecast,
+        mode="lines", name="תחזית AI", line=dict(color='#f59e0b', width=2.5, dash="dash")
     ))
 
     if not actual.empty:
@@ -237,28 +225,15 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
         conn_act_prices = [last_price] + list(actual['close'])
         
         fig.add_trace(go.Scatter(
-            x=conn_act_dates,
-            y=conn_act_prices,
-            mode="lines",
-            name="מה קרה בפועל (המציאות)",
-            line=dict(color='#10b981', width=3)
+            x=conn_act_dates, y=conn_act_prices,
+            mode="lines", name="מה קרה בפועל (המציאות)", line=dict(color='#10b981', width=3)
         ))
         
-        # הפתרון לבאג של Plotly: מציירים קו בנפרד, וטקסט בנפרד
         fig.add_vline(x=last_date, line_width=2, line_dash="dot", line_color="#94a3b8")
-        fig.add_annotation(
-            x=last_date,
-            y=1.05,
-            yref="paper",
-            text="נקודת עיוורון",
-            showarrow=False,
-            font=dict(color="#94a3b8", size=12),
-            xanchor="center"
-        )
+        fig.add_annotation(x=last_date, y=1.05, yref="paper", text="נקודת עיוורון", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
 
     fig.update_layout(
-        template="plotly_white",
-        hovermode="x unified",
+        template="plotly_white", hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=10, r=10, t=40, b=10)
     )
@@ -266,22 +241,111 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
     st.plotly_chart(fig, use_container_width=True)
 
     # =========================
-    # בדיקת ביצועים (Metrics)
+    # בדיקת ביצועים לבדיקה בודדת
     # =========================
     if not actual.empty:
         pred_for_actual = forecast[:cutoff]
         actual_vals = actual['close'].values
 
         mape = np.mean(np.abs((actual_vals - pred_for_actual) / actual_vals)) * 100
-
         actual_direction = actual_vals[-1] - last_price
         pred_direction = pred_for_actual[-1] - last_price
         
         is_trend_correct = (actual_direction > 0 and pred_direction > 0) or (actual_direction < 0 and pred_direction < 0)
-        trend_text = "✅ הצלחה (חזה את הכיוון)" if is_trend_correct else "❌ כישלון (טעה בכיוון המגמה)"
+        trend_text = "✅ הצלחה (חזה נכון)" if is_trend_correct else "❌ כישלון (טעה בכיוון)"
 
-        st.markdown("### 📊 תוצאות מבחן המציאות (Backtest)")
+        st.markdown("### 📊 תוצאות מבחן המציאות שהרצת")
         c1, c2, c3 = st.columns(3)
         c1.metric("סטייה ממוצעת מהמציאות (MAPE)", f"{mape:.2f}%")
         c2.metric("זיהוי מגמה", trend_text)
-        c3.info("💡 **MAPE** נמוך יותר = המודל היה מדויק וקרוב יותר לקו הירוק. \n\n **זיהוי מגמה** בודק אם המודל צדק לפחות בשאלה האם הנכס יעלה או ירד בסוף התקופה.")
+        c3.info("💡 **MAPE** נמוך יותר = המודל היה מדויק. **זיהוי מגמה** בודק אם המודל חזה נכון אם הנכס יעלה או ירד בסוף התקופה.")
+
+    # =========================
+    # טבלת אמינות אוטומטית (מופיעה רק במצב חיזוי עתידי)
+    # =========================
+    elif cutoff == 0:
+        st.divider()
+        st.markdown("### 🔬 טבלת אמינות היסטורית (Backtesting אוטומטי)")
+        st.info("המערכת בוחנת כעת כיצד המודל היה מתפקד אם היינו מריצים אותו בנקודות זמן שונות בעבר. (הפעולה עשויה לקחת כדקה)")
+        
+        prices_full = df['close'].values
+        
+        # הגדרת הטווחי זמן לבדיקה בהתאם לרזולוציה
+        if interval_choice == "1d":
+            test_cutoffs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 126]
+            test_labels = ["1 ימים", "2 ימים", "3 ימים", "4 ימים", "5 ימים", "6 ימים", "7 ימים", "8 ימים", "9 ימים", "10 ימים", "חודש (21 ימים)", "חצי שנה (126 ימים)"]
+        else:
+            test_cutoffs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 50, 100]
+            test_labels = [f"{c} נרות אחורה" for c in test_cutoffs]
+
+        results_list = []
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        for i, (c, label) in enumerate(zip(test_cutoffs, test_labels)):
+            if len(prices_full) - c >= 512:
+                status_text.text(f"בודק אמינות: חוזר {label} אחורה...")
+                
+                # יצירת הנתונים המוסתרים
+                ctx_prices = prices_full[:-c]
+                actual_hidden = prices_full[-c:]
+                last_known_val = prices_full[-(c + 1)]
+                
+                try:
+                    # מריצים את החיזוי על העבר המדומה
+                    test_forecast, _ = model.forecast([ctx_prices], freq=[0])
+                    test_pred = test_forecast[0][:c]
+                    
+                    # חישוב הסטייה
+                    test_mape = np.mean(np.abs((actual_hidden - test_pred) / actual_hidden)) * 100
+                    
+                    # בדיקת כיוון המגמה
+                    act_dir = actual_hidden[-1] - last_known_val
+                    pred_dir = test_pred[-1] - last_known_val
+                    is_correct = (act_dir > 0 and pred_dir > 0) or (act_dir < 0 and pred_dir < 0)
+                    
+                    results_list.append({
+                        "טווח זמן שנבדק": label,
+                        "סטייה ממוצעת מהמציאות (MAPE)": test_mape,
+                        "זיהוי כיוון המגמה": "✅ קלע לכיוון" if is_correct else "❌ טעה בכיוון"
+                    })
+                except:
+                    pass
+                    
+            progress_bar.progress((i + 1) / len(test_cutoffs))
+            
+        status_text.empty()
+        progress_bar.empty()
+        
+        if results_list:
+            res_df = pd.DataFrame(results_list)
+            
+            # חישוב אחוז ההצלחה הכללי (Win Rate)
+            correct_count = sum(1 for r in results_list if "✅" in r["זיהוי כיוון המגמה"])
+            win_rate = (correct_count / len(results_list)) * 100
+            
+            # עיצוב הטבלה
+            def style_trend(val):
+                if "✅" in val: return 'color: #047857; font-weight: bold;'
+                if "❌" in val: return 'color: #b91c1c;'
+                return ''
+                
+            styled_df = res_df.style.format({"סטייה ממוצעת מהמציאות (MAPE)": "{:.2f}%"}).map(style_trend, subset=["זיהוי כיוון המגמה"])
+            
+            st.dataframe(styled_df, use_container_width=True, hide_index=True)
+            
+            if win_rate > 60:
+                st.success(f"🏆 **ציון אמינות כללי למודל על נכס זה: {win_rate:.0f}% הצלחה בזיהוי כיוון.** (המודל נחשב כאמין יחסית למניה זו).")
+            elif win_rate < 40:
+                st.error(f"⚠️ **ציון אמינות כללי למודל על נכס זה: {win_rate:.0f}% הצלחה בזיהוי כיוון.** (לא מומלץ להסתמך על החיזוי העתידי במקרה הזה).")
+            else:
+                st.warning(f"⚖️ **ציון אמינות כללי למודל על נכס זה: {win_rate:.0f}% הצלחה בזיהוי כיוון.** (תוצאה בינונית - כדאי לשלב כלים נוספים).")
+
+st.divider()
+st.markdown("""
+<div style='text-align: center; color: #64748b; font-size: 0.85rem; padding-top: 1rem; padding-bottom: 2rem; direction: rtl;'>
+    מודל החיזוי מופעל באמצעות Google TimesFM 1.0. האתר לצורכי מחקר, ועל אחריות המשתמש.<br>
+    לשיתופי פעולה ניתן לפנות ליוצר במייל: <a href="mailto:147590@gmail.com" style="color: #3b82f6; text-decoration: none;" dir="ltr">147590@gmail.com</a>
+</div>
+""", unsafe_allow_html=True)
