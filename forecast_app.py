@@ -123,26 +123,30 @@ with col1:
 with col2:
     mode = st.radio(
         "סוג ניתוח",
-        ["חיזוי רגיל (עתיד + מבחני עבר)", "חיזוי רב-שכבתי (Multi-Timeframe)"],
+        ["חיזוי רגיל (עתיד + מבחני עבר)", "חיזוי רב-שכבתי כפול (Multi-Timeframe)"],
         horizontal=False
     )
 
 interval_choice = "1d"
+calc_method = "שערים גולמיים"
 
 if mode == "חיזוי רגיל (עתיד + מבחני עבר)":
-    int_map = {"5 דקות": "5m", "15 דקות": "15m", "30 דקות": "30m", "שעתי (60m)": "60m", "יומי (1d)": "1d", "שבועי (1W)": "1W"}
-    resolution_label = st.selectbox("רזולוציית זמן לחיזוי:", list(int_map.keys()), index=4)
-    interval_choice = int_map[resolution_label]
+    c_res, c_meth = st.columns(2)
+    with c_res:
+        int_map = {"5 דקות": "5m", "15 דקות": "15m", "30 דקות": "30m", "שעתי (60m)": "60m", "יומי (1d)": "1d", "שבועי (1W)": "1W"}
+        resolution_label = st.selectbox("רזולוציית זמן:", list(int_map.keys()), index=4)
+        interval_choice = int_map[resolution_label]
+    with c_meth:
+        calc_method = st.radio("שיטת חישוב:", ["שערים גולמיים", "תשואות באחוזים (מומלץ)"])
 else:
-    st.info("🧬 **מצב מחקר מתקדם:** המערכת תמשוך נתונים ברזולוציות שונות (יומי, שעתי, 15 דק') ותציג את הצטלבויות המגמה בגרף אחד.")
+    st.info("🧬 **מצב מחקר מתקדם:** המערכת תריץ במקביל גם שיטת שערים (קו רציף) וגם שיטת תשואות (קו מקווקו) על 3 רזולוציות זמן שונות באותו גרף.")
 
 # =========================
-# מנוע תאריכים מותאם (שני עד שישי)
+# פונקציות ליבה (תאריכים, משיכה, וחיזוי)
 # =========================
 def generate_israel_trading_dates(start_date, periods, tf):
     dates = []
     curr = start_date
-    
     if tf == "60m": step = pd.Timedelta(hours=1)
     elif tf == "30m": step = pd.Timedelta(minutes=30)
     elif tf == "15m": step = pd.Timedelta(minutes=15)
@@ -155,23 +159,16 @@ def generate_israel_trading_dates(start_date, periods, tf):
         if tf == "1W":
             dates.append(curr)
             continue
-            
         weekday = curr.weekday()
         if tf == "1d":
-            if weekday in [0, 1, 2, 3, 4]:
-                dates.append(curr)
+            if weekday in [0, 1, 2, 3, 4]: dates.append(curr)
         else:
             if weekday in [0, 1, 2, 3]:
-                if 10 <= curr.hour < 17:
-                    dates.append(curr)
+                if 10 <= curr.hour < 17: dates.append(curr)
             elif weekday == 4:
-                if 10 <= curr.hour < 14:
-                    dates.append(curr)
+                if 10 <= curr.hour < 14: dates.append(curr)
     return dates
 
-# =========================
-# פונקציות משיכה ויצירת גרפים
-# =========================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_data(symbol, interval_str):
     tv = TvDatafeed()
@@ -184,6 +181,32 @@ def fetch_data(symbol, interval_str):
     else: df.index = df.index.tz_convert("Asia/Jerusalem")
     df.index = df.index.tz_localize(None) 
     return df[['close']]
+
+def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=128):
+    """
+    מבצע חיזוי ומתמודד אוטומטית עם המרת תשואות למחירים במידת הצורך.
+    """
+    if "שערים" in method:
+        forecast_res, quant_res = model.forecast([ctx_prices], freq=[0])
+        return forecast_res[0][:horizon], quant_res[0, :horizon, 0], quant_res[0, :horizon, -1]
+    else:
+        # שיטת תשואות: חישוב אחוזי שינוי
+        returns = np.diff(ctx_prices) / ctx_prices[:-1]
+        # במקרים נדירים של חלוקה באפס או שגיאה, מחליפים ב-0
+        returns = np.nan_to_num(returns)
+        
+        forecast_res, quant_res = model.forecast([returns], freq=[0])
+        fcst_ret = forecast_res[0][:horizon]
+        lower_ret = quant_res[0, :horizon, 0]
+        upper_ret = quant_res[0, :horizon, -1]
+        
+        # שחזור התשואות בחזרה למחיר (ריבית דריבית)
+        last_price = ctx_prices[-1]
+        fcst_prices = last_price * np.cumprod(1 + fcst_ret)
+        fcst_lower = last_price * np.cumprod(1 + lower_ret)
+        fcst_upper = last_price * np.cumprod(1 + upper_ret)
+        
+        return fcst_prices, fcst_lower, fcst_upper
 
 def create_forecast_figure(data_dict):
     ctx_dates, ctx_prices = data_dict['ctx_dates'], data_dict['ctx_prices']
@@ -223,7 +246,6 @@ def show_chart_dialog(c_idx):
     fig = create_forecast_figure(data)
     st.plotly_chart(fig, use_container_width=True)
 
-# יצירת קובץ אקסל
 def generate_excel(data_dict, stock_name):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -248,8 +270,10 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
     st.session_state['selected_stock'] = stock
     st.session_state['raw_data_export'] = {}
         
-    if mode == "חיזוי רב-שכבתי (Multi-Timeframe)":
+    if mode == "חיזוי רב-שכבתי כפול (Multi-Timeframe)":
         tfs = {"1d": ("יומי", "#f59e0b"), "60m": ("שעתי", "#8b5cf6"), "15m": ("15 דקות", "#ef4444")}
+        methods = ["שערים", "תשואות"]
+        
         fig_mtf = go.Figure()
         
         progress_bar = st.progress(0)
@@ -257,50 +281,62 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         
         bg_df = fetch_data(ASSETS[stock], "60m")
         if not bg_df.empty:
-            fig_mtf.add_trace(go.Scatter(x=bg_df.index[-150:], y=bg_df['close'].tail(150), mode="lines", name="היסטוריה קרובה", line=dict(color='#cbd5e1', width=1.5)))
+            fig_mtf.add_trace(go.Scatter(x=bg_df.index[-150:], y=bg_df['close'].tail(150), mode="lines", name="היסטוריה קרובה (שעתי)", line=dict(color='#cbd5e1', width=1.5)))
 
-        for i, (tf, (name, color)) in enumerate(tfs.items()):
-            status_text.text(f"מנתח שכבת זמן: {name}...")
+        total_steps = len(tfs) * len(methods)
+        current_step = 0
+
+        for tf, (name, color) in tfs.items():
             df = fetch_data(ASSETS[stock], tf)
-            
-            if df.empty or len(df) < 512: continue
+            if df.empty or len(df) < 512: 
+                current_step += 2
+                continue
             
             st.session_state['raw_data_export'][f"נתוני_{name}"] = df
-                
             prices_full = df['close'].values
             ctx_prices = prices_full[-1024:] if len(prices_full) > 1024 else prices_full
             last_date = df.index[-1]
             last_price = ctx_prices[-1]
             
-            try:
-                forecast_res, _ = model.forecast([ctx_prices], freq=[0])
-                if tf == "1d": draw_periods = 25
-                elif tf == "60m": draw_periods = 80
-                else: draw_periods = 128
-                
-                fcst_prices = forecast_res[0][:draw_periods]
-                fcst_dates = generate_israel_trading_dates(last_date, draw_periods, tf)
-                
-                conn_dates = [last_date] + list(fcst_dates)
-                conn_fcst = [last_price] + list(fcst_prices)
-                
-                fig_mtf.add_trace(go.Scatter(x=conn_dates, y=conn_fcst, mode="lines", name=f"תחזית {name}", line=dict(color=color, width=2.5)))
-            except Exception as e: pass
+            if tf == "1d": draw_periods = 25
+            elif tf == "60m": draw_periods = 80
+            else: draw_periods = 128
             
-            progress_bar.progress((i + 1) / len(tfs))
+            fcst_dates = generate_israel_trading_dates(last_date, draw_periods, tf)
+            conn_dates = [last_date] + list(fcst_dates)
+            
+            for meth in methods:
+                status_text.text(f"מנתח שכבת זמן: {name} | שיטה: {meth}...")
+                try:
+                    fcst_prices, _, _ = get_forecast(model, ctx_prices, method=meth, horizon=draw_periods)
+                    conn_fcst = [last_price] + list(fcst_prices)
+                    
+                    dash_style = "solid" if meth == "שערים" else "dot"
+                    opac = 1.0 if meth == "שערים" else 0.7
+                    
+                    fig_mtf.add_trace(go.Scatter(
+                        x=conn_dates, y=conn_fcst, mode="lines", 
+                        name=f"תחזית {name} ({meth})", 
+                        line=dict(color=color, width=2.5, dash=dash_style),
+                        opacity=opac
+                    ))
+                except Exception as e: pass
+                
+                current_step += 1
+                progress_bar.progress(current_step / total_steps)
             
         status_text.empty()
         progress_bar.empty()
         
         fig_mtf.update_layout(
             template="plotly_white", hovermode="x unified", title_x=0.5,
-            title=f"תצוגה רב-שכבתית: הצטלבות מגמות ({stock})",
+            title=f"תצוגה רב-שכבתית כפולה: מבוסס שערים ומבוסס תשואות ({stock})",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), 
             margin=dict(l=10, r=10, t=40, b=80) 
         )
         fig_mtf.update_xaxes(nticks=25, tickangle=-45, automargin=True)
         
-        st.markdown("### 🧬 תרשים רב-שכבתי (Multi-Timeframe)")
+        st.markdown("### 🧬 תרשים רב-שכבתי כפול (Multi-Timeframe)")
         st.plotly_chart(fig_mtf, use_container_width=True)
         st.session_state['run_done'] = True
         st.session_state['run_mode'] = mode
@@ -334,7 +370,7 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         status_text = st.empty()
 
         for i, (c, label) in enumerate(zip(test_cutoffs, test_labels)):
-            status_text.text(f"מחשב מודל עבור: {label}...")
+            status_text.text(f"מחשב מודל (שיטה: {calc_method}) עבור: {label}...")
             
             if len(prices_full) - c >= 1024:
                 if c > 0:
@@ -352,11 +388,8 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                 last_price = ctx_prices[-1]
 
                 try:
-                    forecast_res, quant_res = model.forecast([ctx_prices], freq=[0])
-                    fcst_prices = forecast_res[0]
-                    fcst_lower = quant_res[0, :, 0]
-                    fcst_upper = quant_res[0, :, -1]
-
+                    # שימוש בפונקציה החכמה החדשה לחיזוי
+                    fcst_prices, fcst_lower, fcst_upper = get_forecast(model, ctx_prices, method=calc_method, horizon=128)
                     fcst_dates = generate_israel_trading_dates(last_date, 128, interval_choice)
 
                     if c > 0:
@@ -457,9 +490,6 @@ if st.session_state.get('run_done') and st.session_state.get('run_mode') == "ח�
             **דוגמה פשוטה:**
             אם המניה סגרה בפועל במחיר של **100 שקלים**, אבל המודל חזה שהיא תגיע ל-**105 שקלים**, הסטייה היא של **5%**.
             המדד לוקח את כל הסטיות היומיות לאורך התקופה שנבדקה, ומציג את הממוצע שלהן.
-            
-            * **סטייה נמוכה (למשל 1%-3%):** המודל היה מדויק מאוד וקרוב לקו המציאות.
-            * **סטייה גבוהה (למשל מעל 10%):** המודל התקשה לחזות את התנודתיות, או שהתרחש אירוע בלתי צפוי בשוק.
             """)
 
 # =========================
