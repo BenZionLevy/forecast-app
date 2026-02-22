@@ -1,3 +1,15 @@
+הבנתי בדיוק. הסיבה שהצבע נעלם בניסיון הקודם היא שברגע שאנחנו הופכים את ציר ה-X למחרוזות טקסט (Strings כמו "T+1"), מנוע הציור של Plotly מפסיק להתייחס אליו כאל רצף זמן רציף, ולכן הפונקציה של "מילוי שטח" (fill) נשברת.
+
+**הפתרון המקצועי שיישמתי בקוד המלא להלן:**
+
+1. **ציר מספרי רציף (0 = נקודת ההווה):** בניתי מאחורי הקלעים ציר X מספרי לחלוטין. כל ההיסטוריה היא מספרים שליליים (`-1`, `-2`...), נקודת העיוורון היא `0`, והעתיד הוא חיובי (`+1`, `+2`...). בגלל שזה מספרי, מילוי הצבע יעבוד באופן מושלם!
+2. **"הלבשת" טקסט צפוף על הציר:** פקדתי על Plotly להציג על הציר עשרות נקודות (הרבה יותר צפוף), ולקרוא למספרים האלו בשמות הרצויים: `T-10`, `T=0`, `T+10` וכו'.
+3. **חלונית מידע (Hover) עשירה:** כשאתה מרחף עם העכבר על כל נקודה, תראה **גם** את ה-T המדויק (למשל `T-14` או `T+5`) ו**גם** את התאריך/שעה האמיתיים של אותה נקודה, כדי שלא תאבד את ההקשר לזמן האמיתי.
+4. **גרף רב-שכבתי (Multi-Timeframe):** בגרף הזה *חייבים* להשאיר את התאריכים על הציר למטה (אחרת נר יומי ונר של 15 דקות יתנגשו אחד בשני בצורה מעוותת על אותו T+1), **אבל** הפכתי את הציר להרבה יותר צפוף, ובתוך חלונית המידע הוספתי את ספירת ה-`T` לכל נר כדי שתדע בדיוק כמה נרות קדימה אתה מסתכל.
+
+הנה הקוד המלא והמעודכן. אתה יכול להעתיק ולהדביק אותו בשלמותו:
+
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -185,21 +197,17 @@ def fetch_data(symbol, interval_str):
     window = 20
     if 'volume' in df.columns and not df['volume'].empty:
         df['vwap'] = (df['close'] * df['volume']).rolling(window=window).sum() / df['volume'].rolling(window=window).sum()
-        df['vwap'] = df['vwap'].fillna(df['close']) # למנוע שגיאות ב-20 הנרות הראשונים
+        df['vwap'] = df['vwap'].fillna(df['close']) 
     else:
-        df['vwap'] = df['close'] # פולבק במקרה של חוסר בנתוני נפח
+        df['vwap'] = df['close'] 
         
     return df[['close', 'vwap', 'volume']]
 
 def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=128):
-    """
-    מבצע חיזוי ומתמודד אוטומטית עם המרת תשואות למחירים במידת הצורך.
-    """
-    if "תשואות" not in method: # עובד עבור שערים ועבור VWAP
+    if "תשואות" not in method:
         forecast_res, quant_res = model.forecast([ctx_prices], freq=[0])
         return forecast_res[0][:horizon], quant_res[0, :horizon, 0], quant_res[0, :horizon, -1]
     else:
-        # שיטת תשואות: חישוב אחוזי שינוי
         returns = np.diff(ctx_prices) / ctx_prices[:-1]
         returns = np.nan_to_num(returns)
         
@@ -208,7 +216,6 @@ def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=
         lower_ret = quant_res[0, :horizon, 0]
         upper_ret = quant_res[0, :horizon, -1]
         
-        # שחזור התשואות בחזרה למחיר (ריבית דריבית)
         last_price = ctx_prices[-1]
         fcst_prices = last_price * np.cumprod(1 + fcst_ret)
         fcst_lower = last_price * np.cumprod(1 + lower_ret)
@@ -223,80 +230,97 @@ def create_forecast_figure(data_dict):
     fcst_lower, fcst_upper = data_dict['fcst_lower'], data_dict['fcst_upper']
     c_val = data_dict['c_val']
     
-    last_date = ctx_dates[-1]
-    last_price = ctx_prices[-1]
+    hist_len = min(200, len(ctx_prices))
     
-    # משאירים את התאריכים המקוריים כדי שהצבע והרצף לא יישברו
-    conn_dates = [last_date] + list(fcst_dates)
+    # === יצירת ציר X מספרי רציף כדי לאפשר מילוי צבע ===
+    # היסטוריה: [-199, -198 ... 0]
+    x_hist_int = list(range(-hist_len + 1, 1))
+    # עתיד: [1, 2, 3 ...]
+    x_fcst_int = list(range(1, len(fcst_dates) + 1))
+    # קו מקשר (מ-0 והלאה)
+    x_conn_int = [0] + x_fcst_int
+    
+    # === הכנת נתוני CustomData לחלונית צפה (Hover) עשירה ===
+    # מבנה: [T_Label, Real_Date]
+    custom_hist = [[f"T{x}", d.strftime("%Y-%m-%d %H:%M")] for x, d in zip(x_hist_int, ctx_dates[-hist_len:])]
+    custom_hist[-1][0] = "T=0" # הווה
+    
+    custom_fcst = [[f"T+{x}", d.strftime("%Y-%m-%d %H:%M")] for x, d in zip(x_fcst_int, fcst_dates)]
+    custom_conn = [custom_hist[-1]] + custom_fcst
+
+    last_price = ctx_prices[-1]
     conn_fcst = [last_price] + list(fcst_prices)
     conn_lower = [last_price] + list(fcst_lower)
     conn_upper = [last_price] + list(fcst_upper)
     
-    # יצירת תוויות "T+X" עבור חלונית המידע וציר ה-X
-    if c_val == 0:
-        custom_labels = ["הווה"] + [f"T+{i+1}" for i in range(len(fcst_dates))]
-    else:
-        custom_labels = [""] * len(conn_dates)
-
     fig = go.Figure()
     
-    # היסטוריה
+    # 1. היסטוריה
     fig.add_trace(go.Scatter(
-        x=ctx_dates[-200:], y=ctx_prices[-200:], 
+        x=x_hist_int, y=ctx_prices[-hist_len:], 
         mode="lines", name="היסטוריה (בסיס)", 
         line=dict(color='#2563eb', width=2),
-        hovertemplate="מחיר היסטורי: %{y:.2f}<extra></extra>"
+        customdata=custom_hist,
+        hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>מחיר: %{y:.2f}<extra></extra>"
     ))
     
-    # גבול עליון (שקוף, קיים כדי לספק נתונים נפרדים לחלונית)
+    # 2. גבול עליון (שקוף, משמש לנתוני החלונית)
     fig.add_trace(go.Scatter(
-        x=conn_dates, y=conn_upper, 
+        x=x_conn_int, y=conn_upper, 
         mode="lines", line=dict(width=0), 
         name="גבול עליון", showlegend=False,
-        customdata=custom_labels,
-        hovertemplate="גבול עליון: %{y:.2f} | %{customdata}<extra></extra>" if c_val == 0 else "גבול עליון: %{y:.2f}<extra></extra>"
+        customdata=custom_conn,
+        hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>גבול עליון: %{y:.2f}<extra></extra>"
     ))
     
-    # גבול תחתון (מייצר את אזור ההסתברות הצהוב)
+    # 3. גבול תחתון (מילוי שטח למעלה)
     fig.add_trace(go.Scatter(
-        x=conn_dates, y=conn_lower, 
+        x=x_conn_int, y=conn_lower, 
         mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", 
         line=dict(width=0), name="טווח הסתברות",
-        customdata=custom_labels,
-        hovertemplate="גבול תחתון: %{y:.2f} | %{customdata}<extra></extra>" if c_val == 0 else "גבול תחתון: %{y:.2f}<extra></extra>"
+        customdata=custom_conn,
+        hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>גבול תחתון: %{y:.2f}<extra></extra>"
     ))
     
-    # קו התחזית המרכזי (AI)
+    # 4. תחזית AI מרכזית
     fig.add_trace(go.Scatter(
-        x=conn_dates, y=conn_fcst, 
+        x=x_conn_int, y=conn_fcst, 
         mode="lines", name="תחזית AI", 
         line=dict(color='#f59e0b', width=2.5, dash="dash"),
-        customdata=custom_labels,
-        hovertemplate="תחזית מרכזית: %{y:.2f} | %{customdata}<extra></extra>" if c_val == 0 else "תחזית מרכזית: %{y:.2f}<extra></extra>"
+        customdata=custom_conn,
+        hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>תחזית AI: %{y:.2f}<extra></extra>"
     ))
 
-    # מציאות בפועל (בבדיקות עבר בלבד)
+    # 5. מציאות בפועל (בבדיקות עבר)
     if c_val > 0:
-        conn_act_dates = [last_date] + list(actual_dates)
+        x_act_int = list(range(0, len(actual_dates) + 1))
+        custom_act = [custom_hist[-1]] + [[f"T+{x}", d.strftime("%Y-%m-%d %H:%M")] for x, d in zip(range(1, len(actual_dates)+1), actual_dates)]
         conn_act_prices = [last_price] + list(actual_prices)
+        
         fig.add_trace(go.Scatter(
-            x=conn_act_dates, y=conn_act_prices, 
+            x=x_act_int, y=conn_act_prices, 
             mode="lines", name="מציאות בפועל", 
             line=dict(color='#10b981', width=3),
-            hovertemplate="מציאות בפועל: %{y:.2f}<extra></extra>"
+            customdata=custom_act,
+            hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>מציאות בפועל: %{y:.2f}<extra></extra>"
         ))
-        fig.add_vline(x=str(last_date), line_width=2, line_dash="dot", line_color="#94a3b8")
+        fig.add_vline(x=0, line_width=2, line_dash="dot", line_color="#94a3b8")
+        fig.add_annotation(x=0, y=1.05, yref="paper", text="נקודת עיוורון", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
+    else:
+        fig.add_vline(x=0, line_width=2, line_dash="dot", line_color="#94a3b8")
+        fig.add_annotation(x=0, y=1.05, yref="paper", text="הווה (T=0)", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
 
     fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=10, r=10, t=40, b=80))
     
-    # אכיפת "T+X" על ציר ה-X למטה, במרווחים סבירים כדי לא לצופף
-    if c_val == 0:
-        fig.update_xaxes(tickvals=conn_dates[::10], ticktext=custom_labels[::10], tickangle=-45, automargin=True)
-    else:
-        fig.update_xaxes(nticks=25, tickangle=-45, automargin=True)
-        
-    return fig
+    # === יצירת ציר X מרובה וצפוף (קפיצות של 10 נרות) ===
+    min_x = min(x_hist_int)
+    max_x = max(x_fcst_int)
+    tick_vals = list(range((min_x // 10) * 10, max_x + 1, 10))
+    tick_texts = [f"T+{v}" if v > 0 else f"T{v}" if v < 0 else "T=0" for v in tick_vals]
     
+    fig.update_xaxes(tickvals=tick_vals, ticktext=tick_texts, tickangle=-45, automargin=True, title="ציר זמן (מספר נרות ביחס להווה)")
+    return fig
+
 @st.dialog("📊 גרף מפורט - חיזוי מול מציאות", width="large")
 def show_chart_dialog(c_idx):
     data = st.session_state['backtest_data'][c_idx]
@@ -314,7 +338,6 @@ def generate_excel(data_dict, stock_name):
             export_df.reset_index(inplace=True)
             cols = list(export_df.columns)
             
-            # וידוא שקיימות כל העמודות החדשות לפני שינוי שמות
             if 'vwap' in cols and 'volume' in cols:
                 export_df = export_df[[cols[0], 'close', 'vwap', 'volume']]
                 export_df.columns = ["תאריך ושעה", "שער סגירה", "מחיר משוקלל נפח (VWAP)", "נפח מסחר"]
@@ -347,7 +370,16 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         
         bg_df = fetch_data(ASSETS[stock], "60m")
         if not bg_df.empty:
-            fig_mtf.add_trace(go.Scatter(x=bg_df.index[-150:], y=bg_df['close'].tail(150), mode="lines", name="היסטוריה קרובה (שעתי)", line=dict(color='#cbd5e1', width=1.5)))
+            hist_len = 150
+            bg_dates_str = [d.strftime("%Y-%m-%d %H:%M") for d in bg_df.index[-hist_len:]]
+            bg_labels = [[f"T-{hist_len - i}", d] for i, d in enumerate(bg_dates_str)]
+            
+            fig_mtf.add_trace(go.Scatter(
+                x=bg_df.index[-hist_len:], y=bg_df['close'].tail(hist_len), mode="lines", 
+                name="היסטוריה קרובה (שעתי)", line=dict(color='#cbd5e1', width=1.5),
+                customdata=bg_labels,
+                hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>מחיר: %{y:.2f}<extra></extra>"
+            ))
 
         total_steps = len(tfs) * len(methods)
         current_step = 0
@@ -379,8 +411,9 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                     fcst_prices, _, _ = get_forecast(model, ctx_prices, method=meth, horizon=draw_periods)
                     conn_fcst = [last_price] + list(fcst_prices)
                     
-                    # יצירת הנתונים המרחפים (Tooltip) לכל רזולוציית זמן
-                    mtf_labels = ["הווה"] + [f"T+{i+1} ({name})" for i in range(len(fcst_prices))]
+                    # הוספת תוויות T+X מותאמות בחלונית המידע גם בגרף הרב-שכבתי
+                    conn_dates_str = [d.strftime("%Y-%m-%d %H:%M") for d in conn_dates]
+                    mtf_labels = [["T=0", conn_dates_str[0]]] + [[f"T+{i+1} ({name})", conn_dates_str[i+1]] for i in range(len(fcst_prices))]
                     
                     if meth == "שערים": dash_style = "solid"; opac = 1.0
                     elif meth == "VWAP": dash_style = "dashdot"; opac = 0.9
@@ -392,7 +425,7 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                         line=dict(color=color, width=2.5, dash=dash_style),
                         opacity=opac,
                         customdata=mtf_labels,
-                        hovertemplate=f"תחזית {name} ({meth}): %{{y:.2f}} | %{{customdata}}<extra></extra>"
+                        hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>תחזית: %{y:.2f}<extra></extra>"
                     ))
                 except Exception as e: pass
                 
@@ -408,7 +441,8 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), 
             margin=dict(l=10, r=10, t=40, b=80) 
         )
-        fig_mtf.update_xaxes(nticks=25, tickangle=-45, automargin=True)
+        # הפיכת ציר ה-X לצפוף יותר בגרף הרב שכבתי
+        fig_mtf.update_xaxes(nticks=40, tickangle=-45, automargin=True)
         
         st.markdown("### 🧬 תרשים רב-שכבתי (Multi-Timeframe)")
         st.plotly_chart(fig_mtf, use_container_width=True)
@@ -437,7 +471,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         st.session_state['backtest_data'] = {}
         results_list = []
 
-        # משיכת סדרת הנתונים המדויקת לפי בחירת המשתמש בממשק
         prices_full = df['vwap'].values if "VWAP" in calc_method else df['close'].values
         dates_full = df.index
 
@@ -590,3 +623,5 @@ st.markdown("""
     לשיתופי פעולה ניתן לפנות ליוצר במייל: <a href="mailto:147590@gmail.com" style="color: #3b82f6; text-decoration: none;" dir="ltr">147590@gmail.com</a>
 </div>
 """, unsafe_allow_html=True)
+
+```
