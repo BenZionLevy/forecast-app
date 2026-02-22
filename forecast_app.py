@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from tvDatafeed import TvDatafeed, Interval
 import timesfm
 
 st.set_page_config(
-    page_title="חיזוי מניות ת״א-35",
+    page_title="חיזוי מניות AI",
     layout="wide",
     page_icon="📈"
 )
@@ -44,18 +45,18 @@ html, body, [class*="css"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<div class='main-title'>📈 חיזוי מניות – מדד ת״א-35</div>", unsafe_allow_html=True)
+st.markdown("<div class='main-title'>📈 חיזוי מניות ומדדים (Google TimesFM)</div>", unsafe_allow_html=True)
 
 st.markdown("""
 <div class="warning-box">
-⚠️ המערכת לצורכי מחקר בלבד. החיזוי אינו מהווה ייעוץ השקעות.
+⚠️ המערכת נועדה לצורכי מחקר סטטיסטי בלבד. מודל החיזוי אינו מהווה ייעוץ השקעות.
 </div>
 """, unsafe_allow_html=True)
 
 # =========================
-# מודל
+# מודל AI
 # =========================
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_model():
     return timesfm.TimesFm(
         hparams=timesfm.TimesFmHparams(
@@ -70,9 +71,9 @@ def load_model():
     )
 
 # =========================
-# מניות ת״א-35
+# נכסים לבחירה (כולל מאקרו)
 # =========================
-TA35 = {
+ASSETS = {
     "לאומי": ("LUMI", "TASE"),
     "פועלים": ("POLI", "TASE"),
     "דיסקונט": ("DSCT", "TASE"),
@@ -82,65 +83,61 @@ TA35 = {
     "נייס": ("NICE", "TASE"),
     "בזק": ("BEZQ", "TASE"),
     "דלק קבוצה": ("DLEKG", "TASE"),
+    "מדד ת\"א 35": ("TA35", "TASE"), 
+    "S&P 500 ETF": ("SPY", "AMEX"), 
+    'נאסד"ק 100 ETF': ("QQQ", "NASDAQ"), 
+    "USD/ILS (דולר-שקל)": ("USDILS", "FX_IDC")
 }
 
 # =========================
-# בחירה עליונה
+# הגדרות ממשק משתמש
 # =========================
 col1, col2 = st.columns(2)
 
 with col1:
-    stock = st.selectbox("בחר מניה", list(TA35.keys()))
+    stock = st.selectbox("בחר נכס פיננסי", list(ASSETS.keys()))
 
 with col2:
-    resolution_label = st.selectbox("רזולוציה", ["יומי", "שעתי"])
+    int_map = {
+        "5 דקות": "5m", 
+        "15 דקות": "15m", 
+        "30 דקות": "30m", 
+        "שעתי (60m)": "60m", 
+        "יומי (1d)": "1d", 
+        "שבועי (1W)": "1W"
+    }
+    resolution_label = st.selectbox("רזולוציית זמן", list(int_map.keys()), index=4)
+    interval_choice = int_map[resolution_label]
 
-interval_choice = "1d" if resolution_label == "יומי" else "60m"
-
-# =========================
-# סוג חיזוי
-# =========================
 mode = st.radio(
     "סוג חיזוי",
-    ["חיזוי עתידי", "בדיקה היסטורית"],
+    ["חיזוי עתידי (מהיום והלאה)", "בדיקה היסטורית (Backtesting)"],
     horizontal=True
 )
 
 cutoff = 0
 
-if mode == "בדיקה היסטורית":
-    if interval_choice == "1d":
-        options = {
-            "שבוע": 5,
-            "חודש": 21,
-            "3 חודשים": 63,
-            "חצי שנה": 126
-        }
-    else:
-        options = {
-            "יום מסחר (8 שעות)": 8,
-            "3 ימים": 24,
-            "שבוע": 40,
-            "חודש": 160
-        }
-
-    label = st.selectbox("בחר טווח בדיקה", list(options.keys()))
-    cutoff = options[label]
+if mode == "בדיקה היסטורית (Backtesting)":
+    st.info("💡 בחר כמה נרות (תצפיות) להסתיר מהמודל כדי לבחון את הדיוק שלו מול מה שקרה בפועל.")
+    cutoff = st.number_input("כמה נרות לחזור אחורה אל תוך העבר?", min_value=1, max_value=128, value=30)
 
 # =========================
-# נתונים
+# משיכת נתונים
 # =========================
-@st.cache_data(ttl=600)
-def fetch_data(symbol, interval):
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_data(symbol, interval_str):
     tv = TvDatafeed()
-    inter = Interval.in_daily if interval == "1d" else Interval.in_1_hour
+    tv_intervals = {
+        "5m": Interval.in_5_minute,
+        "15m": Interval.in_15_minute,
+        "30m": Interval.in_30_minute,
+        "60m": Interval.in_1_hour,
+        "1d": Interval.in_daily,
+        "1W": Interval.in_weekly
+    }
+    inter = tv_intervals.get(interval_str, Interval.in_daily)
 
-    df = tv.get_hist(
-        symbol=symbol[0],
-        exchange=symbol[1],
-        interval=inter,
-        n_bars=1500
-    )
+    df = tv.get_hist(symbol=symbol[0], exchange=symbol[1], interval=inter, n_bars=1500)
 
     if df is None or df.empty:
         return pd.DataFrame()
@@ -150,20 +147,21 @@ def fetch_data(symbol, interval):
     else:
         df.index = df.index.tz_convert("Asia/Jerusalem")
 
-    df.index = df.index.tz_localize(None)
-
+    # הסרת אזור הזמן מונעת באגים בהצגת הגרף ב-Plotly
+    df.index = df.index.tz_localize(None) 
     return df[['close']]
 
 # =========================
-# הפעלה
+# הפעלה ועיבוד
 # =========================
-if st.button("הפעל חיזוי", width="stretch"):
+if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_container_width=True):
 
-    model = load_model()
-    df = fetch_data(TA35[stock], interval_choice)
+    with st.spinner("טוען מודל ומושך נתונים מ-TradingView..."):
+        model = load_model()
+        df = fetch_data(ASSETS[stock], interval_choice)
 
     if df.empty or (len(df) - cutoff) < 512:
-        st.error("אין מספיק נתונים לצורך חיזוי")
+        st.error("❌ אין מספיק נתונים לצורך חיזוי. המודל דורש מינימום 512 נרות היסטוריים פנויים.")
         st.stop()
 
     if cutoff > 0:
@@ -173,68 +171,121 @@ if st.button("הפעל חיזוי", width="stretch"):
         train = df
         actual = pd.DataFrame()
 
-    forecast, quant = model.forecast([train['close'].values], freq=[0])
-    forecast = forecast[0]
-    lower = quant[0, :, 0]
-    upper = quant[0, :, -1]
+    with st.spinner("ה-AI מנתח תבניות היסטוריות ומחשב תחזית לעתיד..."):
+        # חשוב: פרמטר freq=[0] נדרש בגרסה החדשה של TimesFM
+        forecast, quant = model.forecast([train['close'].values], freq=[0])
+        forecast = forecast[0]
+        lower = quant[0, :, 0]
+        upper = quant[0, :, -1]
 
+    # יצירת צירי זמן לחיזוי
     last_date = train.index[-1]
+    last_price = train['close'].iloc[-1]
 
-    future_dates = (
-        pd.bdate_range(start=last_date, periods=129)[1:]
-        if interval_choice == "1d"
-        else pd.date_range(start=last_date, periods=129, freq="h")[1:]
-    )
+    # יצירת תאריכים עתידיים בהתאם לרזולוציה
+    if interval_choice == "1d":
+        future_dates = pd.bdate_range(start=last_date, periods=129)[1:]
+    elif interval_choice == "1W":
+        future_dates = pd.date_range(start=last_date, periods=129, freq="W")[1:]
+    else:
+        freq_str = interval_choice.replace('m', 'min')
+        future_dates = pd.date_range(start=last_date, periods=129, freq=freq_str)[1:]
 
+    # חיבור הנקודות כדי למנוע נתק בגרף
+    conn_dates = [last_date] + list(future_dates)
+    conn_forecast = [last_price] + list(forecast)
+    conn_lower = [last_price] + list(lower)
+    conn_upper = [last_price] + list(upper)
+
+    # =========================
+    # ויזואליזציה (גרפים)
+    # =========================
     fig = go.Figure()
 
+    # קו היסטוריה
     fig.add_trace(go.Scatter(
         x=train.index[-200:],
         y=train['close'].tail(200),
         mode="lines",
-        name="היסטוריה",
-        line=dict(width=2)
+        name="היסטוריה (בסיס לחיזוי)",
+        line=dict(color='#2563eb', width=2)
     ))
 
+    # גבול עליון (שקוף) לענן ההסתברות
     fig.add_trace(go.Scatter(
-        x=future_dates,
-        y=upper,
+        x=conn_dates,
+        y=conn_upper,
         mode="lines",
         line=dict(width=0),
-        showlegend=False
+        showlegend=False,
+        hoverinfo='skip'
     ))
 
+    # גבול תחתון ומילוי ענן ההסתברות
     fig.add_trace(go.Scatter(
-        x=future_dates,
-        y=lower,
+        x=conn_dates,
+        y=conn_lower,
         mode="lines",
         fill="tonexty",
+        fillcolor="rgba(245, 158, 11, 0.2)",
         line=dict(width=0),
-        name="טווח הסתברות"
+        name="טווח הסתברות (AI)"
     ))
 
+    # קו תחזית AI מרכזי
     fig.add_trace(go.Scatter(
-        x=future_dates,
-        y=forecast,
+        x=conn_dates,
+        y=conn_forecast,
         mode="lines",
-        name="תחזית AI",
-        line=dict(width=3, dash="dash")
+        name="תחזית AI עתידית",
+        line=dict(color='#f59e0b', width=2.5, dash="dash")
     ))
 
+    # אם אנחנו במצב בדיקה לאחור - נוסיף את מה שקרה באמת
     if not actual.empty:
+        conn_act_dates = [last_date] + list(actual.index)
+        conn_act_prices = [last_price] + list(actual['close'])
+        
         fig.add_trace(go.Scatter(
-            x=actual.index,
-            y=actual['close'],
+            x=conn_act_dates,
+            y=conn_act_prices,
             mode="lines",
-            name="מה קרה בפועל",
-            line=dict(width=3)
+            name="מה קרה בפועל (המציאות)",
+            line=dict(color='#10b981', width=3)
         ))
+        
+        # קו מקווקו אנכי המסמן את נקודת העיוורון של המודל
+        fig.add_vline(x=last_date, line_width=2, line_dash="dot", line_color="#94a3b8", annotation_text="נקודת עיוורון", annotation_position="top left")
 
     fig.update_layout(
         template="plotly_white",
         hovermode="x unified",
-        legend=dict(orientation="h"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=10, r=10, t=40, b=10)
     )
 
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # =========================
+    # בדיקת ביצועים (Metrics)
+    # =========================
+    if not actual.empty:
+        # ניקח את התחזיות רק לאורך התקופה שיש לנו עליה מציאות (cutoff)
+        pred_for_actual = forecast[:cutoff]
+        actual_vals = actual['close'].values
+
+        # חישוב אחוז שגיאה ממוצע (MAPE)
+        mape = np.mean(np.abs((actual_vals - pred_for_actual) / actual_vals)) * 100
+
+        # בדיקת מגמה (האם שניהם עלו או שניהם ירדו ביחס לנקודת ההתחלה)
+        actual_direction = actual_vals[-1] - last_price
+        pred_direction = pred_for_actual[-1] - last_price
+        
+        is_trend_correct = (actual_direction > 0 and pred_direction > 0) or (actual_direction < 0 and pred_direction < 0)
+        trend_text = "✅ הצלחה (חזה את הכיוון)" if is_trend_correct else "❌ כישלון (טעה בכיוון המגמה)"
+
+        st.markdown("### 📊 תוצאות מבחן המציאות (Backtest)")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("סטייה ממוצעת מהמציאות (MAPE)", f"{mape:.2f}%")
+        c2.metric("זיהוי מגמה", trend_text)
+        c3.info("💡 **MAPE** נמוך יותר = המודל היה מדויק וקרוב יותר לקו הירוק. \n\n **זיהוי מגמה** בודק אם המודל צדק לפחות בשאלה האם הנכס יעלה או ירד בסוף התקופה.")
