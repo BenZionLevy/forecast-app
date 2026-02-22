@@ -7,3 +7,4 @@ plotly
 tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git
 timesfm
 huggingface_hub
+openpyxl
