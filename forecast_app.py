@@ -226,28 +226,74 @@ def create_forecast_figure(data_dict):
     last_date = ctx_dates[-1]
     last_price = ctx_prices[-1]
     
-    conn_dates = [last_date] + list(fcst_dates)
+    # === המרה ל"נרות קדימה" רק בחיזוי העתיד ===
+    if c_val == 0:
+        # הפיכת היסטוריית התאריכים לטקסט כדי ש-Plotly יזרום ברצף אחד
+        x_hist = [d.strftime("%Y-%m-%d %H:%M") for d in ctx_dates[-200:]]
+        # יצירת מרווחים לעתיד (T+1, T+2...)
+        x_fcst = [f"T+{i+1}" for i in range(len(fcst_dates))]
+        x_conn = [x_hist[-1]] + x_fcst
+    else:
+        # במבחני עבר אנחנו יודעים את התאריכים האמיתיים, נשמור עליהם
+        x_hist = ctx_dates[-200:]
+        x_conn = [last_date] + list(fcst_dates)
+        
     conn_fcst = [last_price] + list(fcst_prices)
     conn_lower = [last_price] + list(fcst_lower)
     conn_upper = [last_price] + list(fcst_upper)
     
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ctx_dates[-200:], y=ctx_prices[-200:], mode="lines", name="היסטוריה (בסיס)", line=dict(color='#2563eb', width=2)))
-    fig.add_trace(go.Scatter(x=conn_dates, y=conn_upper, mode="lines", line=dict(width=0), showlegend=False, hoverinfo='skip'))
-    fig.add_trace(go.Scatter(x=conn_dates, y=conn_lower, mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", line=dict(width=0), name="טווח הסתברות"))
-    fig.add_trace(go.Scatter(x=conn_dates, y=conn_fcst, mode="lines", name="תחזית AI", line=dict(color='#f59e0b', width=2.5, dash="dash")))
+    
+    # 1. גרף ההיסטוריה
+    fig.add_trace(go.Scatter(
+        x=x_hist, y=ctx_prices[-200:], 
+        mode="lines", name="היסטוריה (בסיס)", 
+        line=dict(color='#2563eb', width=2),
+        hovertemplate="מחיר היסטורי: %{y:.2f}<extra></extra>"
+    ))
+    
+    # 2. גבול עליון (שקוף, משמש רק לטובת ה-Tooltip המדויק)
+    fig.add_trace(go.Scatter(
+        x=x_conn, y=conn_upper, 
+        mode="lines", line=dict(width=0), 
+        name="גבול עליון",
+        hovertemplate="גבול עליון: %{y:.2f}<extra></extra>"
+    ))
+    
+    # 3. גבול תחתון (כולל מילוי הצבע כלפי מעלה אל הגבול העליון)
+    fig.add_trace(go.Scatter(
+        x=x_conn, y=conn_lower, 
+        mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", 
+        line=dict(width=0), name="טווח הסתברות",
+        hovertemplate="גבול תחתון: %{y:.2f}<extra></extra>"
+    ))
+    
+    # 4. התחזית במרכז
+    fig.add_trace(go.Scatter(
+        x=x_conn, y=conn_fcst, 
+        mode="lines", name="תחזית AI", 
+        line=dict(color='#f59e0b', width=2.5, dash="dash"),
+        hovertemplate="תחזית AI מרכזית: %{y:.2f}<extra></extra>"
+    ))
 
+    # 5. מציאות בפועל (רלוונטי רק למבחני עבר)
     if c_val > 0:
         conn_act_dates = [last_date] + list(actual_dates)
         conn_act_prices = [last_price] + list(actual_prices)
-        fig.add_trace(go.Scatter(x=conn_act_dates, y=conn_act_prices, mode="lines", name="מציאות בפועל", line=dict(color='#10b981', width=3)))
+        fig.add_trace(go.Scatter(
+            x=conn_act_dates, y=conn_act_prices, 
+            mode="lines", name="מציאות בפועל", 
+            line=dict(color='#10b981', width=3),
+            hovertemplate="מציאות: %{y:.2f}<extra></extra>"
+        ))
         fig.add_vline(x=str(last_date), line_width=2, line_dash="dot", line_color="#94a3b8")
         fig.add_annotation(x=str(last_date), y=1.05, yref="paper", text="נקודת עיוורון", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
 
+    # יישור לימין, תבנית נקייה והצמדת החלונית
     fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=10, r=10, t=40, b=80))
     fig.update_xaxes(nticks=25, tickangle=-45, automargin=True)
     return fig
-
+    
 @st.dialog("📊 גרף מפורט - חיזוי מול מציאות", width="large")
 def show_chart_dialog(c_idx):
     data = st.session_state['backtest_data'][c_idx]
