@@ -621,5 +621,3 @@ st.markdown("""
     לשיתופי פעולה ניתן לפנות ליוצר במייל: <a href="mailto:147590@gmail.com" style="color: #3b82f6; text-decoration: none;" dir="ltr">147590@gmail.com</a>
 </div>
 """, unsafe_allow_html=True)
-
-```
