@@ -7,66 +7,54 @@ import timesfm
 st.set_page_config(
     page_title="חיזוי מניות ת״א-35",
     layout="wide",
-    page_icon="📊"
+    page_icon="📈"
 )
 
-# =============================
-# עיצוב ברוקר כהה
-# =============================
+# =========================
+# עיצוב בהיר מקצועי
+# =========================
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;600;700&display=swap');
 
 html, body, [class*="css"] {
-    font-family: 'Heebo', sans-serif;
+    font-family: 'Assistant', sans-serif;
     direction: rtl;
 }
 
 .stApp {
-    background-color: #0f172a;
-    color: white;
+    background-color: #f4f6f9;
 }
 
-h1, h2, h3, h4 {
-    text-align: right;
-}
-
-.section-box {
-    background-color: #1e293b;
-    padding: 1.2rem;
-    border-radius: 12px;
-    margin-bottom: 1.2rem;
+.main-title {
+    text-align:right;
+    font-size:2.2rem;
+    font-weight:700;
+    margin-bottom:0.3rem;
 }
 
 .warning-box {
-    background-color: #7c2d12;
-    padding: 1rem;
-    border-radius: 10px;
-    margin-bottom: 1rem;
-    font-size: 0.9rem;
-}
-
-button[kind="primary"] {
-    background-color: #2563eb !important;
-    border-radius: 8px !important;
+    background:#fff3cd;
+    border:1px solid #ffeeba;
+    padding:0.8rem;
+    border-radius:8px;
+    margin-bottom:1rem;
+    font-size:0.9rem;
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<h1>📊 חיזוי מניות – מדד ת״א-35</h1>", unsafe_allow_html=True)
+st.markdown("<div class='main-title'>📈 חיזוי מניות – מדד ת״א-35</div>", unsafe_allow_html=True)
 
-# =============================
-# אזהרה עליונה
-# =============================
 st.markdown("""
 <div class="warning-box">
-⚠️ המערכת לצורכי מחקר בלבד. החיזוי אינו מתחשב בחדשות או אירועים כלכליים ואינו מהווה ייעוץ השקעות.
+⚠️ המערכת לצורכי מחקר בלבד. החיזוי אינו מהווה ייעוץ השקעות.
 </div>
 """, unsafe_allow_html=True)
 
-# =============================
-# טעינת מודל
-# =============================
+# =========================
+# מודל
+# =========================
 @st.cache_resource
 def load_model():
     return timesfm.TimesFm(
@@ -81,9 +69,9 @@ def load_model():
         ),
     )
 
-# =============================
+# =========================
 # מניות ת״א-35
-# =============================
+# =========================
 TA35 = {
     "לאומי": ("LUMI", "TASE"),
     "פועלים": ("POLI", "TASE"),
@@ -96,63 +84,52 @@ TA35 = {
     "דלק קבוצה": ("DLEKG", "TASE"),
 }
 
-# =============================
-# בחירה עליונה – נקי וברור
-# =============================
+# =========================
+# בחירה עליונה
+# =========================
 col1, col2 = st.columns(2)
 
 with col1:
     stock = st.selectbox("בחר מניה", list(TA35.keys()))
 
 with col2:
-    resolution = st.selectbox("רזולוציה", {
-        "יומי": "1d",
-        "שעתי": "60m"
-    })
+    resolution_label = st.selectbox("רזולוציה", ["יומי", "שעתי"])
 
-interval_choice = {
-    "יומי": "1d",
-    "שעתי": "60m"
-}[resolution]
+interval_choice = "1d" if resolution_label == "יומי" else "60m"
 
-# =============================
-# הפרדה בין עתידי להיסטורי
-# =============================
+# =========================
+# סוג חיזוי
+# =========================
 mode = st.radio(
-    "סוג החיזוי",
-    ["🔮 חיזוי עתידי", "📈 בדיקה היסטורית (Backtest)"],
+    "סוג חיזוי",
+    ["חיזוי עתידי", "בדיקה היסטורית"],
     horizontal=True
 )
 
-if mode == "📈 בדיקה היסטורית (Backtest)":
-    st.markdown('<div class="section-box">', unsafe_allow_html=True)
+cutoff = 0
 
+if mode == "בדיקה היסטורית":
     if interval_choice == "1d":
-        back_options = {
-            "שבוע אחורה": 5,
-            "חודש אחורה": 21,
+        options = {
+            "שבוע": 5,
+            "חודש": 21,
             "3 חודשים": 63,
             "חצי שנה": 126
         }
     else:
-        back_options = {
-            "יום מסחר אחורה (8 שעות)": 8,
+        options = {
+            "יום מסחר (8 שעות)": 8,
             "3 ימים": 24,
             "שבוע": 40,
             "חודש": 160
         }
 
-    back_label = st.selectbox("בחר טווח בדיקה", list(back_options.keys()))
-    cutoff = back_options[back_label]
+    label = st.selectbox("בחר טווח בדיקה", list(options.keys()))
+    cutoff = options[label]
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
-else:
-    cutoff = 0
-
-# =============================
-# משיכת נתונים
-# =============================
+# =========================
+# נתונים
+# =========================
 @st.cache_data(ttl=600)
 def fetch_data(symbol, interval):
     tv = TvDatafeed()
@@ -177,10 +154,10 @@ def fetch_data(symbol, interval):
 
     return df[['close']]
 
-# =============================
-# הפעלת חיזוי
-# =============================
-if st.button("הפעל חיזוי", use_container_width=True):
+# =========================
+# הפעלה
+# =========================
+if st.button("הפעל חיזוי", width="stretch"):
 
     model = load_model()
     df = fetch_data(TA35[stock], interval_choice)
@@ -197,7 +174,6 @@ if st.button("הפעל חיזוי", use_container_width=True):
         actual = pd.DataFrame()
 
     forecast, quant = model.forecast([train['close'].values], freq=[0])
-
     forecast = forecast[0]
     lower = quant[0, :, 0]
     upper = quant[0, :, -1]
@@ -205,9 +181,9 @@ if st.button("הפעל חיזוי", use_container_width=True):
     last_date = train.index[-1]
 
     future_dates = (
-        pd.bdate_range(start=last_date, periods=128)[1:]
+        pd.bdate_range(start=last_date, periods=129)[1:]
         if interval_choice == "1d"
-        else pd.date_range(start=last_date, periods=128, freq="H")[1:]
+        else pd.date_range(start=last_date, periods=129, freq="h")[1:]
     )
 
     fig = go.Figure()
@@ -217,7 +193,7 @@ if st.button("הפעל חיזוי", use_container_width=True):
         y=train['close'].tail(200),
         mode="lines",
         name="היסטוריה",
-        line=dict(color="#3b82f6", width=2)
+        line=dict(width=2)
     ))
 
     fig.add_trace(go.Scatter(
@@ -233,7 +209,6 @@ if st.button("הפעל חיזוי", use_container_width=True):
         y=lower,
         mode="lines",
         fill="tonexty",
-        fillcolor="rgba(251,191,36,0.15)",
         line=dict(width=0),
         name="טווח הסתברות"
     ))
@@ -243,7 +218,7 @@ if st.button("הפעל חיזוי", use_container_width=True):
         y=forecast,
         mode="lines",
         name="תחזית AI",
-        line=dict(color="#fbbf24", width=3, dash="dash")
+        line=dict(width=3, dash="dash")
     ))
 
     if not actual.empty:
@@ -252,14 +227,14 @@ if st.button("הפעל חיזוי", use_container_width=True):
             y=actual['close'],
             mode="lines",
             name="מה קרה בפועל",
-            line=dict(color="#22c55e", width=3)
+            line=dict(width=3)
         ))
 
     fig.update_layout(
-        template="plotly_dark",
+        template="plotly_white",
         hovermode="x unified",
         legend=dict(orientation="h"),
         margin=dict(l=10, r=10, t=40, b=10)
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
