@@ -1,0 +1,9 @@
+streamlit
+pandas
+numpy
+plotly
+tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git
+timesfm
+huggingface_hub
+jax
+jaxlib
