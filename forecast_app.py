@@ -147,7 +147,6 @@ def fetch_data(symbol, interval_str):
     else:
         df.index = df.index.tz_convert("Asia/Jerusalem")
 
-    # הסרת אזור הזמן מונעת באגים בהצגת הגרף ב-Plotly
     df.index = df.index.tz_localize(None) 
     return df[['close']]
 
@@ -172,17 +171,14 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
         actual = pd.DataFrame()
 
     with st.spinner("ה-AI מנתח תבניות היסטוריות ומחשב תחזית לעתיד..."):
-        # חשוב: פרמטר freq=[0] נדרש בגרסה החדשה של TimesFM
         forecast, quant = model.forecast([train['close'].values], freq=[0])
         forecast = forecast[0]
         lower = quant[0, :, 0]
         upper = quant[0, :, -1]
 
-    # יצירת צירי זמן לחיזוי
     last_date = train.index[-1]
     last_price = train['close'].iloc[-1]
 
-    # יצירת תאריכים עתידיים בהתאם לרזולוציה
     if interval_choice == "1d":
         future_dates = pd.bdate_range(start=last_date, periods=129)[1:]
     elif interval_choice == "1W":
@@ -191,7 +187,6 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
         freq_str = interval_choice.replace('m', 'min')
         future_dates = pd.date_range(start=last_date, periods=129, freq=freq_str)[1:]
 
-    # חיבור הנקודות כדי למנוע נתק בגרף
     conn_dates = [last_date] + list(future_dates)
     conn_forecast = [last_price] + list(forecast)
     conn_lower = [last_price] + list(lower)
@@ -202,7 +197,6 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
     # =========================
     fig = go.Figure()
 
-    # קו היסטוריה
     fig.add_trace(go.Scatter(
         x=train.index[-200:],
         y=train['close'].tail(200),
@@ -211,7 +205,6 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
         line=dict(color='#2563eb', width=2)
     ))
 
-    # גבול עליון (שקוף) לענן ההסתברות
     fig.add_trace(go.Scatter(
         x=conn_dates,
         y=conn_upper,
@@ -221,7 +214,6 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
         hoverinfo='skip'
     ))
 
-    # גבול תחתון ומילוי ענן ההסתברות
     fig.add_trace(go.Scatter(
         x=conn_dates,
         y=conn_lower,
@@ -232,7 +224,6 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
         name="טווח הסתברות (AI)"
     ))
 
-    # קו תחזית AI מרכזי
     fig.add_trace(go.Scatter(
         x=conn_dates,
         y=conn_forecast,
@@ -241,7 +232,6 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
         line=dict(color='#f59e0b', width=2.5, dash="dash")
     ))
 
-    # אם אנחנו במצב בדיקה לאחור - נוסיף את מה שקרה באמת
     if not actual.empty:
         conn_act_dates = [last_date] + list(actual.index)
         conn_act_prices = [last_price] + list(actual['close'])
@@ -254,8 +244,17 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
             line=dict(color='#10b981', width=3)
         ))
         
-        # קו מקווקו אנכי המסמן את נקודת העיוורון של המודל - הומר ל-str כדי לפתור שגיאת Plotly
-        fig.add_vline(x=str(last_date), line_width=2, line_dash="dot", line_color="#94a3b8", annotation_text="נקודת עיוורון", annotation_position="top left")
+        # הפתרון לבאג של Plotly: מציירים קו בנפרד, וטקסט בנפרד
+        fig.add_vline(x=last_date, line_width=2, line_dash="dot", line_color="#94a3b8")
+        fig.add_annotation(
+            x=last_date,
+            y=1.05,
+            yref="paper",
+            text="נקודת עיוורון",
+            showarrow=False,
+            font=dict(color="#94a3b8", size=12),
+            xanchor="center"
+        )
 
     fig.update_layout(
         template="plotly_white",
@@ -270,14 +269,11 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
     # בדיקת ביצועים (Metrics)
     # =========================
     if not actual.empty:
-        # ניקח את התחזיות רק לאורך התקופה שיש לנו עליה מציאות (cutoff)
         pred_for_actual = forecast[:cutoff]
         actual_vals = actual['close'].values
 
-        # חישוב אחוז שגיאה ממוצע (MAPE)
         mape = np.mean(np.abs((actual_vals - pred_for_actual) / actual_vals)) * 100
 
-        # בדיקת מגמה (האם שניהם עלו או שניהם ירדו ביחס לנקודת ההתחלה)
         actual_direction = actual_vals[-1] - last_price
         pred_direction = pred_for_actual[-1] - last_price
         
