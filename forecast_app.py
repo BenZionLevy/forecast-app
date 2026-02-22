@@ -111,10 +111,8 @@ with col2:
     resolution_label = st.selectbox("רזולוציית זמן", list(int_map.keys()), index=4)
     interval_choice = int_map[resolution_label]
 
-st.info("💡 המערכת תבצע כעת חיזוי לעתיד, ובנוסף תריץ אוטומטית בדיקות היסטוריות (Backtesting) כדי לבדוק את אמינות המודל בתקופות זמן קודמות.")
-
 # =========================
-# פונקציות משיכה וחלון צף (Popup)
+# פונקציות משיכה ויצירת גרפים
 # =========================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_data(symbol, interval_str):
@@ -136,16 +134,13 @@ def fetch_data(symbol, interval_str):
     df.index = df.index.tz_localize(None) 
     return df[['close']]
 
-# חלון צף להצגת גרף כשלוחצים על שורה בטבלה
-@st.dialog("📊 גרף מפורט - מודל חיזוי", width="large")
-def show_chart_dialog(c_idx):
-    data = st.session_state['backtest_data'][c_idx]
-    
-    ctx_dates, ctx_prices = data['ctx_dates'], data['ctx_prices']
-    actual_dates, actual_prices = data['actual_dates'], data['actual_prices']
-    fcst_dates, fcst_prices = data['fcst_dates'], data['fcst_prices']
-    fcst_lower, fcst_upper = data['fcst_lower'], data['fcst_upper']
-    c_val = data['c_val']
+# פונקציה לייצור הגרף (מונעת שכפול קוד ומשמשת גם לגרף הראשי וגם לחלון הצף)
+def create_forecast_figure(data_dict):
+    ctx_dates, ctx_prices = data_dict['ctx_dates'], data_dict['ctx_prices']
+    actual_dates, actual_prices = data_dict['actual_dates'], data_dict['actual_prices']
+    fcst_dates, fcst_prices = data_dict['fcst_dates'], data_dict['fcst_prices']
+    fcst_lower, fcst_upper = data_dict['fcst_lower'], data_dict['fcst_upper']
+    c_val = data_dict['c_val']
     
     last_date = ctx_dates[-1]
     last_price = ctx_prices[-1]
@@ -157,12 +152,16 @@ def show_chart_dialog(c_idx):
     
     fig = go.Figure()
     
+    # היסטוריה
     fig.add_trace(go.Scatter(x=ctx_dates[-200:], y=ctx_prices[-200:], mode="lines", name="היסטוריה (בסיס לחיזוי)", line=dict(color='#2563eb', width=2)))
+    # גבול עליון לענן
     fig.add_trace(go.Scatter(x=conn_dates, y=conn_upper, mode="lines", line=dict(width=0), showlegend=False, hoverinfo='skip'))
+    # גבול תחתון לענן (ממלא שטח למעלה)
     fig.add_trace(go.Scatter(x=conn_dates, y=conn_lower, mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", line=dict(width=0), name="טווח הסתברות (AI)"))
+    # קו התחזית
     fig.add_trace(go.Scatter(x=conn_dates, y=conn_fcst, mode="lines", name="תחזית AI", line=dict(color='#f59e0b', width=2.5, dash="dash")))
 
-    if c_val > 0: # אם זה לא חיזוי עתידי אמיתי, אלא בדיקת עבר
+    if c_val > 0: # תוספת מציאות בבדיקת Backtest
         conn_act_dates = [last_date] + list(actual_dates)
         conn_act_prices = [last_price] + list(actual_prices)
         fig.add_trace(go.Scatter(x=conn_act_dates, y=conn_act_prices, mode="lines", name="מה קרה בפועל (המציאות)", line=dict(color='#10b981', width=3)))
@@ -171,7 +170,22 @@ def show_chart_dialog(c_idx):
         fig.add_vline(x=str(last_date), line_width=2, line_dash="dot", line_color="#94a3b8")
         fig.add_annotation(x=str(last_date), y=1.05, yref="paper", text="נקודת עיוורון", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
 
-    fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=10, r=10, t=40, b=10))
+    fig.update_layout(
+        template="plotly_white", 
+        hovermode="x unified", 
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), 
+        margin=dict(l=10, r=10, t=40, b=10)
+    )
+    # אילוץ צפיפות גדולה יותר של תאריכים בציר ה-X עם זווית נוחה לקריאה
+    fig.update_xaxes(nticks=25, tickangle=-45)
+
+    return fig
+
+# חלון צף להצגת גרף כשלוחצים על שורה בטבלה ההיסטורית
+@st.dialog("📊 גרף בדיקת עבר - מודל חיזוי מול מציאות", width="large")
+def show_chart_dialog(c_idx):
+    data = st.session_state['backtest_data'][c_idx]
+    fig = create_forecast_figure(data)
     st.plotly_chart(fig, use_container_width=True)
 
 # =========================
@@ -191,11 +205,11 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
     if interval_choice == "1d":
         unit = "ימי מסחר"
         test_cutoffs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 63, 126]
-        test_labels = ["עכשיו (חיזוי עתידי אמיתי)"] + [f"{c} {unit} אחורה" for c in test_cutoffs[1:11]] + ["חודש (21 ימים) אחורה", "3 חודשים (63 ימים) אחורה", "חצי שנה (126 ימים) אחורה"]
+        test_labels = ["חיזוי עתידי אמיתי (היום והלאה)"] + [f"{c} {unit} אחורה" for c in test_cutoffs[1:11]] + ["חודש (21 ימים) אחורה", "3 חודשים (63 ימים) אחורה", "חצי שנה (126 ימים) אחורה"]
     else:
         unit = "תקופות זמן"
         test_cutoffs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 50, 100]
-        test_labels = ["עכשיו (חיזוי עתידי אמיתי)"] + [f"{c} {unit} אחורה" for c in test_cutoffs[1:]]
+        test_labels = ["חיזוי עתידי אמיתי (היום והלאה)"] + [f"{c} {unit} אחורה" for c in test_cutoffs[1:]]
 
     st.session_state['test_cutoffs'] = test_cutoffs
     st.session_state['backtest_data'] = {}
@@ -249,19 +263,21 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                     trend_str = "✅ קלע לכיוון" if is_correct else "❌ טעה בכיוון"
                     mape_str = f"{mape:.2f}%"
                 else:
-                    trend_str = "⏳ ממתין לעתיד"
+                    trend_str = "🔮 עתיד"
                     mape_str = "---"
                     is_correct = None
 
-                results_list.append({
-                    "נקודת התחלה": label,
-                    "סטייה מהמציאות (MAPE)": mape_str,
-                    "זיהוי כיוון מגמה": trend_str,
-                    "_c_val": c,
-                    "_is_correct": is_correct
-                })
+                # נוסיף לטבלה רק את שורות ה-Backtest (העתיד מוצג בגרף נפרד למעלה)
+                if c > 0:
+                    results_list.append({
+                        "נקודת התחלה": label,
+                        "סטייה מהמציאות (MAPE)": mape_str,
+                        "זיהוי כיוון מגמה": trend_str,
+                        "_c_val": c,
+                        "_is_correct": is_correct
+                    })
 
-                # שמירת הנתונים לטובת החלון הצף
+                # שמירת הנתונים לטובת ציור הגרף (עתידי וחלונות צפים)
                 st.session_state['backtest_data'][c] = {
                     'ctx_dates': ctx_dates, 'ctx_prices': ctx_prices,
                     'actual_dates': actual_dates, 'actual_prices': actual_prices,
@@ -271,7 +287,7 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                 }
 
             except Exception as e:
-                pass # מדלג בשקט אם המודל נכשל ספציפית בתקופה מסוימת
+                pass 
                 
         progress_bar.progress((i + 1) / len(test_cutoffs))
 
@@ -283,12 +299,21 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         st.session_state['run_done'] = True
 
 # =========================
-# הצגת הטבלה ולכידת לחיצה
+# תצוגת התוצאות (גרף עתידי ואז טבלה)
 # =========================
 if st.session_state.get('run_done'):
+    
+    # 1. הצגת גרף החיזוי העתידי (האמיתי) בגדול למעלה
+    st.markdown("### 📈 תחזית עתידית (מהיום והלאה)")
+    future_data = st.session_state['backtest_data'][0] # אינדקס 0 זה ההווה
+    fig_future = create_forecast_figure(future_data)
+    st.plotly_chart(fig_future, use_container_width=True)
+    
+    st.divider()
+
+    # 2. הצגת טבלת האמינות (Backtesting) ממתחת
     df_res = st.session_state['results_df']
 
-    # חישוב אחוז הצלחה (Win Rate)
     correct_count = sum(1 for x in df_res['_is_correct'] if x == True)
     total_tests = sum(1 for x in df_res['_is_correct'] if x is not None)
     win_rate = (correct_count / total_tests) * 100 if total_tests > 0 else 0
@@ -298,14 +323,13 @@ if st.session_state.get('run_done'):
     def style_trend(val):
         if "✅" in str(val): return 'color: #047857; font-weight: bold;'
         if "❌" in str(val): return 'color: #b91c1c;'
-        if "⏳" in str(val): return 'color: #3b82f6; font-weight: bold;'
         return ''
 
     styled_df = display_df.style.map(style_trend, subset=["זיהוי כיוון מגמה"])
 
-    st.markdown("### 📋 תוצאות הבדיקות: **לחץ על שורה בטבלה כדי לפתוח את הגרף שלה** 👇")
+    st.markdown("### 🔬 מבחני אמינות למודל (Backtesting)")
+    st.markdown("**לחץ על שורה בטבלה כדי לפתוח את החיזוי מול המציאות בגרף מפורט** 👇")
 
-    # טבלה אינטראקטיבית
     event = st.dataframe(
         styled_df,
         use_container_width=True,
@@ -315,21 +339,18 @@ if st.session_state.get('run_done'):
         key="backtest_table"
     )
 
-    # פתיחת החלון הצף בלחיצה על שורה
     if len(event.selection.rows) > 0:
         selected_row_idx = event.selection.rows[0]
         selected_c = df_res.iloc[selected_row_idx]['_c_val']
         show_chart_dialog(selected_c)
 
-    # סיכום מילולי ואזהרה למטה
-    st.divider()
     if total_tests > 0:
         if win_rate >= 60:
-            st.success(f"🏆 **ציון אמינות למודל:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (נחשב למודל יציב ואמין עבור הנכס הזה)")
+            st.success(f"🏆 **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (נחשב למודל יציב ואמין עבור הנכס הזה)")
         elif win_rate <= 40:
-            st.error(f"⚠️ **ציון אמינות למודל:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (המודל מתקשה לקרוא את הנכס הזה, לא מומלץ להסתמך עליו כאן)")
+            st.error(f"⚠️ **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (המודל מתקשה לקרוא את הנכס הזה, לא מומלץ להסתמך עליו כאן)")
         else:
-            st.warning(f"⚖️ **ציון אמינות למודל:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (תוצאה בינונית - כדאי לשלב כלים נוספים בהחלטה)")
+            st.warning(f"⚖️ **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (תוצאה בינונית - כדאי לשלב כלים נוספים בהחלטה)")
 
 st.divider()
 st.markdown("""
