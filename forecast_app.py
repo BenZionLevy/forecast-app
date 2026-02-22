@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from tvDatafeed import TvDatafeed, Interval
 import timesfm
+import io
 
 st.set_page_config(
     page_title="חיזוי מניות AI",
@@ -49,7 +50,6 @@ div[data-testid="stMarkdownContainer"], div[data-testid="stAlert"] {
     direction: rtl;
 }
 
-/* עיצוב כותרות הטבלה החדשה */
 .table-header {
     font-weight: bold;
     color: #475569;
@@ -86,7 +86,7 @@ def load_model():
     )
 
 # =========================
-# נכסים לבחירה
+# נכסים לבחירה וקישורי Yahoo
 # =========================
 ASSETS = {
     "לאומי": ("LUMI", "TASE"), "פועלים": ("POLI", "TASE"), "דיסקונט": ("DSCT", "TASE"),
@@ -94,6 +94,22 @@ ASSETS = {
     "נייס": ("NICE", "TASE"), "בזק": ("BEZQ", "TASE"), "דלק קבוצה": ("DLEKG", "TASE"),
     "מדד ת\"א 35": ("TA35", "TASE"), "S&P 500 ETF": ("SPY", "AMEX"), 
     'נאסד"ק 100 ETF': ("QQQ", "NASDAQ"), "USD/ILS (דולר-שקל)": ("USDILS", "FX_IDC")
+}
+
+YAHOO_LINKS = {
+    "לאומי": "https://finance.yahoo.com/quote/LUMI.TA",
+    "פועלים": "https://finance.yahoo.com/quote/POLI.TA",
+    "דיסקונט": "https://finance.yahoo.com/quote/DSCT.TA",
+    "מזרחי טפחות": "https://finance.yahoo.com/quote/MZTF.TA",
+    "אלביט מערכות": "https://finance.yahoo.com/quote/ESLT.TA",
+    "טבע": "https://finance.yahoo.com/quote/TEVA.TA",
+    "נייס": "https://finance.yahoo.com/quote/NICE.TA",
+    "בזק": "https://finance.yahoo.com/quote/BEZQ.TA",
+    "דלק קבוצה": "https://finance.yahoo.com/quote/DLEKG.TA",
+    "מדד ת\"א 35": "https://finance.yahoo.com/quote/^TA35",
+    "S&P 500 ETF": "https://finance.yahoo.com/quote/SPY",
+    'נאסד"ק 100 ETF': "https://finance.yahoo.com/quote/QQQ",
+    "USD/ILS (דולר-שקל)": "https://finance.yahoo.com/quote/ILS=X"
 }
 
 # =========================
@@ -124,11 +140,6 @@ else:
 # מנוע תאריכים מותאם (שני עד שישי)
 # =========================
 def generate_israel_trading_dates(start_date, periods, tf):
-    """
-    מייצר תאריכים עתידיים לבורסה הישראלית:
-    ימי מסחר: שני עד שישי (0, 1, 2, 3, 4).
-    שעות מסחר: ב'-ה' 10:00-17:00, ו' 10:00-14:00.
-    """
     dates = []
     curr = start_date
     
@@ -141,25 +152,21 @@ def generate_israel_trading_dates(start_date, periods, tf):
     
     while len(dates) < periods:
         curr += step
-        
         if tf == "1W":
             dates.append(curr)
             continue
             
-        # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
         weekday = curr.weekday()
-        
         if tf == "1d":
             if weekday in [0, 1, 2, 3, 4]:
                 dates.append(curr)
         else:
-            if weekday in [0, 1, 2, 3]: # שני עד חמישי
+            if weekday in [0, 1, 2, 3]:
                 if 10 <= curr.hour < 17:
                     dates.append(curr)
-            elif weekday == 4: # שישי (מקוצר)
+            elif weekday == 4:
                 if 10 <= curr.hour < 14:
                     dates.append(curr)
-                
     return dates
 
 # =========================
@@ -194,7 +201,6 @@ def create_forecast_figure(data_dict):
     conn_upper = [last_price] + list(fcst_upper)
     
     fig = go.Figure()
-    
     fig.add_trace(go.Scatter(x=ctx_dates[-200:], y=ctx_prices[-200:], mode="lines", name="היסטוריה (בסיס)", line=dict(color='#2563eb', width=2)))
     fig.add_trace(go.Scatter(x=conn_dates, y=conn_upper, mode="lines", line=dict(width=0), showlegend=False, hoverinfo='skip'))
     fig.add_trace(go.Scatter(x=conn_dates, y=conn_lower, mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", line=dict(width=0), name="טווח הסתברות"))
@@ -209,7 +215,6 @@ def create_forecast_figure(data_dict):
 
     fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=10, r=10, t=40, b=80))
     fig.update_xaxes(nticks=25, tickangle=-45, automargin=True)
-
     return fig
 
 @st.dialog("📊 גרף מפורט - חיזוי מול מציאות", width="large")
@@ -218,6 +223,20 @@ def show_chart_dialog(c_idx):
     fig = create_forecast_figure(data)
     st.plotly_chart(fig, use_container_width=True)
 
+# יצירת קובץ אקסל
+def generate_excel(data_dict, stock_name):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        link_df = pd.DataFrame({"נכס פיננסי": [stock_name], "קישור לאימות (Yahoo Finance)": [YAHOO_LINKS.get(stock_name, "אין נתון")]})
+        link_df.to_excel(writer, index=False, sheet_name="מידע וקישורים")
+        
+        for sheet_name, df in data_dict.items():
+            export_df = df.copy()
+            export_df.reset_index(inplace=True)
+            export_df.columns = ["תאריך ושעה", "שער סגירה"]
+            export_df.to_excel(writer, index=False, sheet_name=sheet_name)
+    return output.getvalue()
+
 # =========================
 # הפעלת הלולאה והחישובים
 # =========================
@@ -225,17 +244,17 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
 
     with st.spinner("טוען מודל ומושך נתונים מ-TradingView..."):
         model = load_model()
+    
+    st.session_state['selected_stock'] = stock
+    st.session_state['raw_data_export'] = {}
         
-    # מסלול 1: חיזוי רב-שכבתי (Multi-Timeframe)
     if mode == "חיזוי רב-שכבתי (Multi-Timeframe)":
-        
         tfs = {"1d": ("יומי", "#f59e0b"), "60m": ("שעתי", "#8b5cf6"), "15m": ("15 דקות", "#ef4444")}
         fig_mtf = go.Figure()
         
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # היסטוריית רקע קצרה להמחשה (מהגרף השעתי)
         bg_df = fetch_data(ASSETS[stock], "60m")
         if not bg_df.empty:
             fig_mtf.add_trace(go.Scatter(x=bg_df.index[-150:], y=bg_df['close'].tail(150), mode="lines", name="היסטוריה קרובה", line=dict(color='#cbd5e1', width=1.5)))
@@ -245,6 +264,8 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             df = fetch_data(ASSETS[stock], tf)
             
             if df.empty or len(df) < 512: continue
+            
+            st.session_state['raw_data_export'][f"נתוני_{name}"] = df
                 
             prices_full = df['close'].values
             ctx_prices = prices_full[-1024:] if len(prices_full) > 1024 else prices_full
@@ -253,8 +274,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             
             try:
                 forecast_res, _ = model.forecast([ctx_prices], freq=[0])
-                
-                # חיתוך אופק הזמן כדי שהגרפים לא ידחפו אחד את השני
                 if tf == "1d": draw_periods = 25
                 elif tf == "60m": draw_periods = 80
                 else: draw_periods = 128
@@ -286,13 +305,14 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         st.session_state['run_done'] = True
         st.session_state['run_mode'] = mode
 
-    # מסלול 2: חיזוי רגיל (עתיד + היסטוריה אוטומטית)
     else:
         df = fetch_data(ASSETS[stock], interval_choice)
-
+        
         if df.empty or len(df) < 1200:
             st.error("❌ אין מספיק נתונים עבור הנכס הזה. נסה רזולוציית זמן קצרה יותר.")
             st.stop()
+            
+        st.session_state['raw_data_export']["נתונים_גולמיים"] = df
 
         if interval_choice == "1d":
             unit = "ימי מסחר"
@@ -337,7 +357,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                     fcst_lower = quant_res[0, :, 0]
                     fcst_upper = quant_res[0, :, -1]
 
-                    # שימוש בפונקציית התאריכים הישראלית החדשה
                     fcst_dates = generate_israel_trading_dates(last_date, 128, interval_choice)
 
                     if c > 0:
@@ -346,7 +365,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                         act_dir = actual_prices[-1] - last_price
                         pred_dir = pred_for_actual[-1] - last_price
                         is_correct = (act_dir > 0 and pred_dir > 0) or (act_dir < 0 and pred_dir < 0)
-                        
                         trend_str = "✅ קלע לכיוון" if is_correct else "❌ טעה בכיוון"
                         mape_str = f"{mape:.2f}%"
                     else:
@@ -370,7 +388,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                         'fcst_lower': fcst_lower, 'fcst_upper': fcst_upper,
                         'c_val': c, 'label': label
                     }
-
                 except Exception as e: pass 
                     
             progress_bar.progress((i + 1) / len(test_cutoffs))
@@ -378,7 +395,7 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         status_text.empty()
         progress_bar.empty()
 
-        if results_list:
+        if results_list or mode == "חיזוי עתידי רגיל":
             st.session_state['results_df'] = pd.DataFrame(results_list)
             st.session_state['run_done'] = True
             st.session_state['run_mode'] = mode
@@ -405,37 +422,26 @@ if st.session_state.get('run_done') and st.session_state.get('run_mode') == "ח�
         st.markdown("### 🔬 מבחני אמינות אוטומטיים למודל")
         st.info("💡 המערכת חזרה אחורה בזמן ובדקה אם התחזיות שלה אכן התממשו במציאות. **לחץ על לחצן 'הצג' בכל שורה כדי לראות את הגרף!**")
 
-        # =========================
-        # יצירת טבלה מותאמת אישית עם לחצנים אמיתיים
-        # =========================
-        
-        # כותרות הטבלה
         col_h1, col_h2, col_h3, col_h4 = st.columns([2, 2, 2, 1])
         col_h1.markdown("<div class='table-header'>נקודת התחלה (בדיקת עבר)</div>", unsafe_allow_html=True)
         col_h2.markdown("<div class='table-header'>סטייה מהמציאות (MAPE)</div>", unsafe_allow_html=True)
         col_h3.markdown("<div class='table-header'>זיהוי כיוון מגמה</div>", unsafe_allow_html=True)
         col_h4.markdown("<div class='table-header'>פעולה</div>", unsafe_allow_html=True)
         
-        # הדפסת השורות
         for index, row in df_res.iterrows():
             c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
             c1.write(row['label'])
             c2.write(row['mape'])
             
-            # צביעת טקסט המגמה
             trend = row['trend']
-            if "✅" in trend:
-                c3.markdown(f"<span style='color: #047857; font-weight: bold;'>{trend}</span>", unsafe_allow_html=True)
-            else:
-                c3.markdown(f"<span style='color: #b91c1c; font-weight: bold;'>{trend}</span>", unsafe_allow_html=True)
+            if "✅" in trend: c3.markdown(f"<span style='color: #047857; font-weight: bold;'>{trend}</span>", unsafe_allow_html=True)
+            else: c3.markdown(f"<span style='color: #b91c1c; font-weight: bold;'>{trend}</span>", unsafe_allow_html=True)
             
-            # לחצן אמיתי ופעיל
             if c4.button("📊 הצג", key=f"btn_show_{row['_c_val']}"):
                 show_chart_dialog(row['_c_val'])
                 
             st.markdown("<hr style='margin: 0.2rem 0; opacity: 0.2;'>", unsafe_allow_html=True)
 
-        # סיכום מדדים
         if total_tests > 1:
             if win_rate >= 60:
                 st.success(f"🏆 **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (נחשב למודל יציב ואמין עבור הנכס הזה)")
@@ -455,6 +461,23 @@ if st.session_state.get('run_done') and st.session_state.get('run_mode') == "ח�
             * **סטייה נמוכה (למשל 1%-3%):** המודל היה מדויק מאוד וקרוב לקו המציאות.
             * **סטייה גבוהה (למשל מעל 10%):** המודל התקשה לחזות את התנודתיות, או שהתרחש אירוע בלתי צפוי בשוק.
             """)
+
+# =========================
+# כפתור הורדת אקסל (מופיע בסוף כל הרצה)
+# =========================
+if st.session_state.get('run_done'):
+    st.divider()
+    st.markdown("### 📥 בדיקת נתונים גולמיים")
+    st.info("כדי להבטיח שקיפות מלאה, באפשרותך להוריד את קובץ הנתונים הגולמי שעליו התבסס המודל לאימות מול מקורות חיצוניים. הקובץ כולל גיליון עם קישור ישיר למניה באתר Yahoo Finance.")
+    
+    excel_file = generate_excel(st.session_state['raw_data_export'], st.session_state['selected_stock'])
+    st.download_button(
+        label="💾 הורד קובץ נתונים (Excel)",
+        data=excel_file,
+        file_name=f"{st.session_state['selected_stock']}_RawData.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
 
 st.divider()
 st.markdown("""
