@@ -24,19 +24,12 @@ html, body, [class*="css"] {
     text-align: right;
 }
 
-div[data-testid="stMarkdownContainer"] {
+div[data-testid="stMarkdownContainer"], div[data-testid="stAlert"] {
     direction: rtl;
     text-align: right;
 }
 
-div[data-testid="stAlert"] {
-    direction: rtl;
-    text-align: right;
-}
-
-.stApp {
-    background-color: #f4f6f9;
-}
+.stApp { background-color: #f4f6f9; }
 
 .main-title {
     text-align: right;
@@ -54,6 +47,15 @@ div[data-testid="stAlert"] {
     font-size: 0.9rem;
     text-align: right;
     direction: rtl;
+}
+
+/* עיצוב כותרות הטבלה החדשה */
+.table-header {
+    font-weight: bold;
+    color: #475569;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #cbd5e1;
+    margin-bottom: 10px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -87,19 +89,11 @@ def load_model():
 # נכסים לבחירה
 # =========================
 ASSETS = {
-    "לאומי": ("LUMI", "TASE"),
-    "פועלים": ("POLI", "TASE"),
-    "דיסקונט": ("DSCT", "TASE"),
-    "מזרחי טפחות": ("MZTF", "TASE"),
-    "אלביט מערכות": ("ESLT", "TASE"),
-    "טבע": ("TEVA", "TASE"),
-    "נייס": ("NICE", "TASE"),
-    "בזק": ("BEZQ", "TASE"),
-    "דלק קבוצה": ("DLEKG", "TASE"),
-    "מדד ת\"א 35": ("TA35", "TASE"), 
-    "S&P 500 ETF": ("SPY", "AMEX"), 
-    'נאסד"ק 100 ETF': ("QQQ", "NASDAQ"), 
-    "USD/ILS (דולר-שקל)": ("USDILS", "FX_IDC")
+    "לאומי": ("LUMI", "TASE"), "פועלים": ("POLI", "TASE"), "דיסקונט": ("DSCT", "TASE"),
+    "מזרחי טפחות": ("MZTF", "TASE"), "אלביט מערכות": ("ESLT", "TASE"), "טבע": ("TEVA", "TASE"),
+    "נייס": ("NICE", "TASE"), "בזק": ("BEZQ", "TASE"), "דלק קבוצה": ("DLEKG", "TASE"),
+    "מדד ת\"א 35": ("TA35", "TASE"), "S&P 500 ETF": ("SPY", "AMEX"), 
+    'נאסד"ק 100 ETF': ("QQQ", "NASDAQ"), "USD/ILS (דולר-שקל)": ("USDILS", "FX_IDC")
 }
 
 # =========================
@@ -112,37 +106,32 @@ with col1:
 
 with col2:
     mode = st.radio(
-        "סוג חיזוי",
-        ["חיזוי עתידי רגיל", "בדיקה היסטורית (Backtest)", "חיזוי רב-שכבתי (Multi-Timeframe)"],
+        "סוג ניתוח",
+        ["חיזוי רגיל (עתיד + מבחני עבר)", "חיזוי רב-שכבתי (Multi-Timeframe)"],
         horizontal=False
     )
 
 interval_choice = "1d"
-cutoff = 0
 
-if mode != "חיזוי רב-שכבתי (Multi-Timeframe)":
+if mode == "חיזוי רגיל (עתיד + מבחני עבר)":
     int_map = {"5 דקות": "5m", "15 דקות": "15m", "30 דקות": "30m", "שעתי (60m)": "60m", "יומי (1d)": "1d", "שבועי (1W)": "1W"}
-    resolution_label = st.selectbox("רזולוציית זמן (עבור חיזוי רגיל/היסטורי)", list(int_map.keys()), index=4)
+    resolution_label = st.selectbox("רזולוציית זמן לחיזוי:", list(int_map.keys()), index=4)
     interval_choice = int_map[resolution_label]
-
-if mode == "בדיקה היסטורית (Backtest)":
-    st.info("💡 בחר כמה תצפיות להסתיר מהמודל כדי לבחון את הדיוק שלו מול מה שקרה בפועל.")
-    cutoff = st.number_input("כמה נרות לחזור אחורה אל תוך העבר?", min_value=1, max_value=128, value=30)
-elif mode == "חיזוי רב-שכבתי (Multi-Timeframe)":
-    st.info("🧬 **מצב מחקר מתקדם:** מציג את ההצטלבות בין המגמה הקצרה לארוכה. הגרפים נחתכו בצורה חכמה כדי שיהיה אפשר לראות את כולם מקרוב.")
+else:
+    st.info("🧬 **מצב מחקר מתקדם:** המערכת תמשוך נתונים ברזולוציות שונות (יומי, שעתי, 15 דק') ותציג את הצטלבויות המגמה בגרף אחד.")
 
 # =========================
-# מנוע תאריכים מותאם לבורסה
+# מנוע תאריכים מותאם (שני עד שישי)
 # =========================
 def generate_israel_trading_dates(start_date, periods, tf):
     """
-    מייצר תאריכים עתידיים תוך דילוג על שישי-שבת.
-    ברזולוציה תוך יומית, מדלג על שעות הלילה ומתמקד ב-10:00 עד 17:00.
+    מייצר תאריכים עתידיים לבורסה הישראלית:
+    ימי מסחר: שני עד שישי (0, 1, 2, 3, 4).
+    שעות מסחר: ב'-ה' 10:00-17:00, ו' 10:00-14:00.
     """
     dates = []
     curr = start_date
     
-    # הגדרת קפיצת הזמן (Step)
     if tf == "60m": step = pd.Timedelta(hours=1)
     elif tf == "30m": step = pd.Timedelta(minutes=30)
     elif tf == "15m": step = pd.Timedelta(minutes=15)
@@ -153,21 +142,23 @@ def generate_israel_trading_dates(start_date, periods, tf):
     while len(dates) < periods:
         curr += step
         
-        # שבועי פשוט קופץ קדימה
         if tf == "1W":
             dates.append(curr)
             continue
             
-        # ימי מסחר בישראל: ראשון(6), שני(0), שלישי(1), רביעי(2), חמישי(3)
-        is_trading_day = curr.weekday() in [6, 0, 1, 2, 3]
+        # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+        weekday = curr.weekday()
         
         if tf == "1d":
-            if is_trading_day:
+            if weekday in [0, 1, 2, 3, 4]:
                 dates.append(curr)
-        else: # רזולוציה תוך יומית (שעות/דקות)
-            is_trading_hour = 10 <= curr.hour < 17
-            if is_trading_day and is_trading_hour:
-                dates.append(curr)
+        else:
+            if weekday in [0, 1, 2, 3]: # שני עד חמישי
+                if 10 <= curr.hour < 17:
+                    dates.append(curr)
+            elif weekday == 4: # שישי (מקוצר)
+                if 10 <= curr.hour < 14:
+                    dates.append(curr)
                 
     return dates
 
@@ -204,15 +195,15 @@ def create_forecast_figure(data_dict):
     
     fig = go.Figure()
     
-    fig.add_trace(go.Scatter(x=ctx_dates[-200:], y=ctx_prices[-200:], mode="lines", name="היסטוריה (בסיס לחיזוי)", line=dict(color='#2563eb', width=2)))
+    fig.add_trace(go.Scatter(x=ctx_dates[-200:], y=ctx_prices[-200:], mode="lines", name="היסטוריה (בסיס)", line=dict(color='#2563eb', width=2)))
     fig.add_trace(go.Scatter(x=conn_dates, y=conn_upper, mode="lines", line=dict(width=0), showlegend=False, hoverinfo='skip'))
-    fig.add_trace(go.Scatter(x=conn_dates, y=conn_lower, mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", line=dict(width=0), name="טווח הסתברות (AI)"))
+    fig.add_trace(go.Scatter(x=conn_dates, y=conn_lower, mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", line=dict(width=0), name="טווח הסתברות"))
     fig.add_trace(go.Scatter(x=conn_dates, y=conn_fcst, mode="lines", name="תחזית AI", line=dict(color='#f59e0b', width=2.5, dash="dash")))
 
     if c_val > 0:
         conn_act_dates = [last_date] + list(actual_dates)
         conn_act_prices = [last_price] + list(actual_prices)
-        fig.add_trace(go.Scatter(x=conn_act_dates, y=conn_act_prices, mode="lines", name="מה קרה בפועל (המציאות)", line=dict(color='#10b981', width=3)))
+        fig.add_trace(go.Scatter(x=conn_act_dates, y=conn_act_prices, mode="lines", name="מציאות בפועל", line=dict(color='#10b981', width=3)))
         fig.add_vline(x=str(last_date), line_width=2, line_dash="dot", line_color="#94a3b8")
         fig.add_annotation(x=str(last_date), y=1.05, yref="paper", text="נקודת עיוורון", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
 
@@ -221,7 +212,7 @@ def create_forecast_figure(data_dict):
 
     return fig
 
-@st.dialog("📊 גרף בדיקת עבר - מודל חיזוי מול מציאות", width="large")
+@st.dialog("📊 גרף מפורט - חיזוי מול מציאות", width="large")
 def show_chart_dialog(c_idx):
     data = st.session_state['backtest_data'][c_idx]
     fig = create_forecast_figure(data)
@@ -232,30 +223,28 @@ def show_chart_dialog(c_idx):
 # =========================
 if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_container_width=True):
 
-    with st.spinner("טוען מודל ומושך נתונים מקסימליים מ-TradingView..."):
+    with st.spinner("טוען מודל ומושך נתונים מ-TradingView..."):
         model = load_model()
         
     # מסלול 1: חיזוי רב-שכבתי (Multi-Timeframe)
     if mode == "חיזוי רב-שכבתי (Multi-Timeframe)":
         
         tfs = {"1d": ("יומי", "#f59e0b"), "60m": ("שעתי", "#8b5cf6"), "15m": ("15 דקות", "#ef4444")}
-        
         fig_mtf = go.Figure()
+        
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # כדי לצייר היסטוריה אחידה ויפה ברקע, נשתמש בגרף השעתי כבסיס
+        # היסטוריית רקע קצרה להמחשה (מהגרף השעתי)
         bg_df = fetch_data(ASSETS[stock], "60m")
         if not bg_df.empty:
-            # נמשוך רק את 150 השעות האחרונות להיסטוריה כדי להתמקד בעתיד
             fig_mtf.add_trace(go.Scatter(x=bg_df.index[-150:], y=bg_df['close'].tail(150), mode="lines", name="היסטוריה קרובה", line=dict(color='#cbd5e1', width=1.5)))
 
         for i, (tf, (name, color)) in enumerate(tfs.items()):
             status_text.text(f"מנתח שכבת זמן: {name}...")
             df = fetch_data(ASSETS[stock], tf)
             
-            if df.empty or len(df) < 512:
-                continue
+            if df.empty or len(df) < 512: continue
                 
             prices_full = df['close'].values
             ctx_prices = prices_full[-1024:] if len(prices_full) > 1024 else prices_full
@@ -265,13 +254,10 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             try:
                 forecast_res, _ = model.forecast([ctx_prices], freq=[0])
                 
-                # כאן אנחנו חותכים את התחזיות הארוכות כדי שכולן יתיישבו יפה על המסך
-                if tf == "1d": 
-                    draw_periods = 25  # מציג בערך חודש קדימה
-                elif tf == "60m": 
-                    draw_periods = 80  # מציג בערך 10 ימי מסחר קדימה
-                else: 
-                    draw_periods = 128 # מציג בערך 3-4 ימי מסחר קדימה
+                # חיתוך אופק הזמן כדי שהגרפים לא ידחפו אחד את השני
+                if tf == "1d": draw_periods = 25
+                elif tf == "60m": draw_periods = 80
+                else: draw_periods = 128
                 
                 fcst_prices = forecast_res[0][:draw_periods]
                 fcst_dates = generate_israel_trading_dates(last_date, draw_periods, tf)
@@ -280,10 +266,8 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                 conn_fcst = [last_price] + list(fcst_prices)
                 
                 fig_mtf.add_trace(go.Scatter(x=conn_dates, y=conn_fcst, mode="lines", name=f"תחזית {name}", line=dict(color=color, width=2.5)))
-                
-            except Exception as e:
-                pass
-                
+            except Exception as e: pass
+            
             progress_bar.progress((i + 1) / len(tfs))
             
         status_text.empty()
@@ -299,15 +283,15 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         
         st.markdown("### 🧬 תרשים רב-שכבתי (Multi-Timeframe)")
         st.plotly_chart(fig_mtf, use_container_width=True)
-        
-        st.info("💡 הקו הכתום קוצר כדי שתוכל לעשות 'זום-אין' ולראות בבירור את התנועה העדינה של הגרף השעתי וה-15 דקות.")
+        st.session_state['run_done'] = True
+        st.session_state['run_mode'] = mode
 
-    # מסלול 2: חיזוי רגיל או Backtesting יחיד
+    # מסלול 2: חיזוי רגיל (עתיד + היסטוריה אוטומטית)
     else:
         df = fetch_data(ASSETS[stock], interval_choice)
 
         if df.empty or len(df) < 1200:
-            st.error("❌ אין מספיק נתונים עבור הנכס הזה (דרושים לפחות 1200 תצפיות לעבודה תקינה). נסה רזולוציית זמן קצרה יותר.")
+            st.error("❌ אין מספיק נתונים עבור הנכס הזה. נסה רזולוציית זמן קצרה יותר.")
             st.stop()
 
         if interval_choice == "1d":
@@ -318,10 +302,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             unit = "תקופות זמן"
             test_cutoffs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 50, 100]
             test_labels = ["חיזוי עתידי אמיתי (היום והלאה)"] + [f"{c} {unit} אחורה" for c in test_cutoffs[1:]]
-
-        if mode == "בדיקה היסטורית (Backtest)":
-            test_cutoffs = [cutoff]
-            test_labels = [f"בדיקה ספציפית ({cutoff} תצפיות אחורה)"]
 
         st.session_state['test_cutoffs'] = test_cutoffs
         st.session_state['backtest_data'] = {}
@@ -376,10 +356,9 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
 
                     if c > 0:
                         results_list.append({
-                            "פעולה": "📊 הצג גרף",
-                            "נקודת התחלה (בדיקת עבר)": label,
-                            "סטייה ממוצעת מהמציאות (MAPE)": mape_str,
-                            "זיהוי כיוון מגמה": trend_str,
+                            "label": label,
+                            "mape": mape_str,
+                            "trend": trend_str,
                             "_c_val": c,
                             "_is_correct": is_correct
                         })
@@ -392,38 +371,30 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                         'c_val': c, 'label': label
                     }
 
-                except Exception as e:
-                    pass 
+                except Exception as e: pass 
                     
             progress_bar.progress((i + 1) / len(test_cutoffs))
 
         status_text.empty()
         progress_bar.empty()
 
-        if results_list or mode == "חיזוי עתידי רגיל":
+        if results_list:
             st.session_state['results_df'] = pd.DataFrame(results_list)
             st.session_state['run_done'] = True
             st.session_state['run_mode'] = mode
 
 # =========================
-# תצוגת התוצאות
+# תצוגת התוצאות (לחיזוי רגיל בלבד)
 # =========================
-if st.session_state.get('run_done') and st.session_state.get('run_mode') != "חיזוי רב-שכבתי (Multi-Timeframe)":
+if st.session_state.get('run_done') and st.session_state.get('run_mode') == "חיזוי רגיל (עתיד + מבחני עבר)":
     
-    if st.session_state['run_mode'] == "חיזוי עתידי רגיל":
-        st.markdown("### 📈 תחזית עתידית (מהיום והלאה)")
-        future_data = st.session_state['backtest_data'][0]
-        fig_future = create_forecast_figure(future_data)
-        st.plotly_chart(fig_future, use_container_width=True)
-        st.divider()
-    elif st.session_state['run_mode'] == "בדיקה היסטורית (Backtest)":
-        st.markdown("### 📈 בדיקה היסטורית בודדת")
-        first_key = list(st.session_state['backtest_data'].keys())[0]
-        single_test_data = st.session_state['backtest_data'][first_key]
-        fig_single = create_forecast_figure(single_test_data)
-        st.plotly_chart(fig_single, use_container_width=True)
-        st.divider()
-
+    st.markdown("### 📈 תחזית עתידית (מהיום והלאה)")
+    future_data = st.session_state['backtest_data'][0]
+    fig_future = create_forecast_figure(future_data)
+    st.plotly_chart(fig_future, use_container_width=True)
+    
+    st.divider()
+    
     df_res = st.session_state.get('results_df', pd.DataFrame())
 
     if not df_res.empty:
@@ -431,36 +402,40 @@ if st.session_state.get('run_done') and st.session_state.get('run_mode') != "ח�
         total_tests = sum(1 for x in df_res['_is_correct'] if x is not None)
         win_rate = (correct_count / total_tests) * 100 if total_tests > 0 else 0
 
-        display_df = df_res.drop(columns=['_c_val', '_is_correct'])
+        st.markdown("### 🔬 מבחני אמינות אוטומטיים למודל")
+        st.info("💡 המערכת חזרה אחורה בזמן ובדקה אם התחזיות שלה אכן התממשו במציאות. **לחץ על לחצן 'הצג' בכל שורה כדי לראות את הגרף!**")
 
-        def style_trend(val):
-            if "✅" in str(val): return 'color: #047857; font-weight: bold;'
-            if "❌" in str(val): return 'color: #b91c1c;'
-            return ''
+        # =========================
+        # יצירת טבלה מותאמת אישית עם לחצנים אמיתיים
+        # =========================
+        
+        # כותרות הטבלה
+        col_h1, col_h2, col_h3, col_h4 = st.columns([2, 2, 2, 1])
+        col_h1.markdown("<div class='table-header'>נקודת התחלה (בדיקת עבר)</div>", unsafe_allow_html=True)
+        col_h2.markdown("<div class='table-header'>סטייה מהמציאות (MAPE)</div>", unsafe_allow_html=True)
+        col_h3.markdown("<div class='table-header'>זיהוי כיוון מגמה</div>", unsafe_allow_html=True)
+        col_h4.markdown("<div class='table-header'>פעולה</div>", unsafe_allow_html=True)
+        
+        # הדפסת השורות
+        for index, row in df_res.iterrows():
+            c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+            c1.write(row['label'])
+            c2.write(row['mape'])
+            
+            # צביעת טקסט המגמה
+            trend = row['trend']
+            if "✅" in trend:
+                c3.markdown(f"<span style='color: #047857; font-weight: bold;'>{trend}</span>", unsafe_allow_html=True)
+            else:
+                c3.markdown(f"<span style='color: #b91c1c; font-weight: bold;'>{trend}</span>", unsafe_allow_html=True)
+            
+            # לחצן אמיתי ופעיל
+            if c4.button("📊 הצג", key=f"btn_show_{row['_c_val']}"):
+                show_chart_dialog(row['_c_val'])
+                
+            st.markdown("<hr style='margin: 0.2rem 0; opacity: 0.2;'>", unsafe_allow_html=True)
 
-        styled_df = display_df.style.map(style_trend, subset=["זיהוי כיוון מגמה"])
-
-        if st.session_state['run_mode'] == "חיזוי עתידי רגיל":
-            st.markdown("### 🔬 מבחני אמינות אוטומטיים למודל")
-        else:
-            st.markdown("### 🔬 תוצאות הבדיקה שהגדרת")
-
-        st.info("💡 **הוראות:** לחץ על שורה בטבלה כדי לפתוח את הגרף שלה ולראות את החיזוי מול המציאות.")
-
-        event = st.dataframe(
-            styled_df,
-            use_container_width=True,
-            hide_index=True,
-            selection_mode="single-row",
-            on_select="rerun",
-            key="backtest_table"
-        )
-
-        if len(event.selection.rows) > 0:
-            selected_row_idx = event.selection.rows[0]
-            selected_c = df_res.iloc[selected_row_idx]['_c_val']
-            show_chart_dialog(selected_c)
-
+        # סיכום מדדים
         if total_tests > 1:
             if win_rate >= 60:
                 st.success(f"🏆 **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (נחשב למודל יציב ואמין עבור הנכס הזה)")
