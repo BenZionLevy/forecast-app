@@ -254,8 +254,8 @@ if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_conta
             line=dict(color='#10b981', width=3)
         ))
         
-        # קו מקווקו אנכי המסמן את נקודת העיוורון של המודל
-        fig.add_vline(x=last_date, line_width=2, line_dash="dot", line_color="#94a3b8", annotation_text="נקודת עיוורון", annotation_position="top left")
+        # קו מקווקו אנכי המסמן את נקודת העיוורון של המודל - הומר ל-str כדי לפתור שגיאת Plotly
+        fig.add_vline(x=str(last_date), line_width=2, line_dash="dot", line_color="#94a3b8", annotation_text="נקודת עיוורון", annotation_position="top left")
 
     fig.update_layout(
         template="plotly_white",
