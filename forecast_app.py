@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 # =========================
-# עיצוב בהיר מקצועי (אכיפת RTL מוחלטת)
+# עיצוב בהיר מקצועי
 # =========================
 st.markdown("""
 <style>
@@ -67,7 +67,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# טעינת מודל AI (נשמר בזיכרון)
+# טעינת מודל AI עם זיכרון כפול (1024)
 # =========================
 @st.cache_resource(show_spinner=False)
 def load_model():
@@ -76,7 +76,7 @@ def load_model():
             backend="cpu",
             per_core_batch_size=1,
             horizon_len=128,
-            context_len=512,
+            context_len=1024, # <--- זיכרון כפול לניתוח מגמות ארוכות יותר
         ),
         checkpoint=timesfm.TimesFmCheckpoint(
             huggingface_repo_id="google/timesfm-1.0-200m-pytorch"
@@ -122,7 +122,7 @@ with col2:
     resolution_label = st.selectbox("רזולוציית זמן", list(int_map.keys()), index=4)
     interval_choice = int_map[resolution_label]
 
-st.info("💡 המערכת תבצע כעת חיזוי לעתיד, ובנוסף תריץ אוטומטית בדיקות היסטוריות (Backtesting) כדי לבדוק את אמינות המודל בתקופות זמן קודמות.")
+st.info("💡 המערכת שואבת מקסימום נתונים מהעבר (עד 4000 תצפיות) כדי להעניק למודל את ההקשר המדויק ביותר האפשרי לחיזוי.")
 
 # =========================
 # פונקציות משיכה ויצירת גרפים
@@ -139,7 +139,9 @@ def fetch_data(symbol, interval_str):
         "1W": Interval.in_weekly
     }
     inter = tv_intervals.get(interval_str, Interval.in_daily)
-    df = tv.get_hist(symbol=symbol[0], exchange=symbol[1], interval=inter, n_bars=1500)
+    
+    # מושכים 4000 נרות כדי שלמודל יהיה מקסימום מידע לרוץ עליו
+    df = tv.get_hist(symbol=symbol[0], exchange=symbol[1], interval=inter, n_bars=4000)
     
     if df is None or df.empty: return pd.DataFrame()
     if df.index.tz is None: df.index = df.index.tz_localize("UTC").tz_convert("Asia/Jerusalem")
@@ -181,9 +183,8 @@ def create_forecast_figure(data_dict):
         template="plotly_white", 
         hovermode="x unified", 
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), 
-        margin=dict(l=10, r=10, t=40, b=80) # הוגדל המרווח התחתון כדי למנוע חיתוך תאריכים
+        margin=dict(l=10, r=10, t=40, b=80) 
     )
-    # אילוץ צפיפות גדולה יותר והגדרת automargin למניעת הסתרה
     fig.update_xaxes(nticks=25, tickangle=-45, automargin=True)
 
     return fig
@@ -199,12 +200,13 @@ def show_chart_dialog(c_idx):
 # =========================
 if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_container_width=True):
 
-    with st.spinner("טוען מודל ומושך נתונים מ-TradingView..."):
+    with st.spinner("טוען מודל ומושך נתונים מקסימליים מ-TradingView..."):
         model = load_model()
         df = fetch_data(ASSETS[stock], interval_choice)
 
-    if df.empty or len(df) < 600:
-        st.error("❌ אין מספיק נתונים עבור הנכס הזה (דרושים לפחות 600 תצפיות לעבודה תקינה).")
+    # בגלל שהגדלנו ל-1024, אנחנו צריכים לוודא שיש מספיק נתונים
+    if df.empty or len(df) < 1200:
+        st.error("❌ אין מספיק נתונים עבור הנכס הזה (דרושים לפחות 1200 תצפיות לעבודה במצב הזיכרון המוגדל). נסה רזולוציית זמן קצרה יותר.")
         st.stop()
 
     if interval_choice == "1d":
@@ -229,7 +231,8 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
     for i, (c, label) in enumerate(zip(test_cutoffs, test_labels)):
         status_text.text(f"מחשב מודל עבור: {label}...")
         
-        if len(prices_full) - c >= 512:
+        # וידוא שיש מספיק נתונים לזיכרון המוגדל (1024)
+        if len(prices_full) - c >= 1024:
             if c > 0:
                 ctx_prices = prices_full[:-c]
                 ctx_dates = dates_full[:-c]
