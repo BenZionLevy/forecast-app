@@ -195,14 +195,10 @@ def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=
     if "תשואות" not in method:
         forecast_res, quant_res = model.forecast([ctx_prices], freq=[0])
         
-        # שולפים כמה אחוזונים המודל החזיר, ומוצאים את האינדקס האמצעי (חציון)
-        num_quantiles = quant_res.shape[2]
-        median_idx = num_quantiles // 2
-        
-        # החלפנו את התחזית הרגילה (forecast_res) בחציון המדויק מתוך הטווחים!
-        fcst_prices = quant_res[0, :horizon, median_idx] 
-        fcst_lower = quant_res[0, :horizon, 0]
-        fcst_upper = quant_res[0, :horizon, -1]
+        # אינדקס 1 הוא אחוזון 10, אינדקס 5 הוא החציון (50), ואינדקס -1 הוא אחוזון 90
+        fcst_prices = quant_res[0, :horizon, 5]  # חציון
+        fcst_lower = quant_res[0, :horizon, 1]   # גבול תחתון אמיתי (10%)
+        fcst_upper = quant_res[0, :horizon, -1]  # גבול עליון (90%)
         
         return fcst_prices, fcst_lower, fcst_upper
     else:
@@ -211,12 +207,9 @@ def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=
         
         forecast_res, quant_res = model.forecast([returns], freq=[0])
         
-        num_quantiles = quant_res.shape[2]
-        median_idx = num_quantiles // 2
-        
-        # שולפים את החציון גם בשיטת התשואות
-        fcst_ret = quant_res[0, :horizon, median_idx]
-        lower_ret = quant_res[0, :horizon, 0]
+        # אותה שליפה מדויקת גם עבור שיטת התשואות
+        fcst_ret = quant_res[0, :horizon, 5]
+        lower_ret = quant_res[0, :horizon, 1]
         upper_ret = quant_res[0, :horizon, -1]
         
         last_price = ctx_prices[-1]
