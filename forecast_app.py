@@ -226,57 +226,56 @@ def create_forecast_figure(data_dict):
     last_date = ctx_dates[-1]
     last_price = ctx_prices[-1]
     
-    # === המרה ל"נרות קדימה" רק בחיזוי העתיד ===
-    if c_val == 0:
-        # הפיכת היסטוריית התאריכים לטקסט כדי ש-Plotly יזרום ברצף אחד
-        x_hist = [d.strftime("%Y-%m-%d %H:%M") for d in ctx_dates[-200:]]
-        # יצירת מרווחים לעתיד (T+1, T+2...)
-        x_fcst = [f"T+{i+1}" for i in range(len(fcst_dates))]
-        x_conn = [x_hist[-1]] + x_fcst
-    else:
-        # במבחני עבר אנחנו יודעים את התאריכים האמיתיים, נשמור עליהם
-        x_hist = ctx_dates[-200:]
-        x_conn = [last_date] + list(fcst_dates)
-        
+    # משאירים את התאריכים המקוריים כדי שהצבע והרצף לא יישברו
+    conn_dates = [last_date] + list(fcst_dates)
     conn_fcst = [last_price] + list(fcst_prices)
     conn_lower = [last_price] + list(fcst_lower)
     conn_upper = [last_price] + list(fcst_upper)
     
+    # יצירת תוויות "T+X" עבור חלונית המידע וציר ה-X
+    if c_val == 0:
+        custom_labels = ["הווה"] + [f"T+{i+1}" for i in range(len(fcst_dates))]
+    else:
+        custom_labels = [""] * len(conn_dates)
+
     fig = go.Figure()
     
-    # 1. גרף ההיסטוריה
+    # היסטוריה
     fig.add_trace(go.Scatter(
-        x=x_hist, y=ctx_prices[-200:], 
+        x=ctx_dates[-200:], y=ctx_prices[-200:], 
         mode="lines", name="היסטוריה (בסיס)", 
         line=dict(color='#2563eb', width=2),
         hovertemplate="מחיר היסטורי: %{y:.2f}<extra></extra>"
     ))
     
-    # 2. גבול עליון (שקוף, משמש רק לטובת ה-Tooltip המדויק)
+    # גבול עליון (שקוף, קיים כדי לספק נתונים נפרדים לחלונית)
     fig.add_trace(go.Scatter(
-        x=x_conn, y=conn_upper, 
+        x=conn_dates, y=conn_upper, 
         mode="lines", line=dict(width=0), 
-        name="גבול עליון",
-        hovertemplate="גבול עליון: %{y:.2f}<extra></extra>"
+        name="גבול עליון", showlegend=False,
+        customdata=custom_labels,
+        hovertemplate="גבול עליון: %{y:.2f} | %{customdata}<extra></extra>" if c_val == 0 else "גבול עליון: %{y:.2f}<extra></extra>"
     ))
     
-    # 3. גבול תחתון (כולל מילוי הצבע כלפי מעלה אל הגבול העליון)
+    # גבול תחתון (מייצר את אזור ההסתברות הצהוב)
     fig.add_trace(go.Scatter(
-        x=x_conn, y=conn_lower, 
+        x=conn_dates, y=conn_lower, 
         mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", 
         line=dict(width=0), name="טווח הסתברות",
-        hovertemplate="גבול תחתון: %{y:.2f}<extra></extra>"
+        customdata=custom_labels,
+        hovertemplate="גבול תחתון: %{y:.2f} | %{customdata}<extra></extra>" if c_val == 0 else "גבול תחתון: %{y:.2f}<extra></extra>"
     ))
     
-    # 4. התחזית במרכז
+    # קו התחזית המרכזי (AI)
     fig.add_trace(go.Scatter(
-        x=x_conn, y=conn_fcst, 
+        x=conn_dates, y=conn_fcst, 
         mode="lines", name="תחזית AI", 
         line=dict(color='#f59e0b', width=2.5, dash="dash"),
-        hovertemplate="תחזית AI מרכזית: %{y:.2f}<extra></extra>"
+        customdata=custom_labels,
+        hovertemplate="תחזית מרכזית: %{y:.2f} | %{customdata}<extra></extra>" if c_val == 0 else "תחזית מרכזית: %{y:.2f}<extra></extra>"
     ))
 
-    # 5. מציאות בפועל (רלוונטי רק למבחני עבר)
+    # מציאות בפועל (בבדיקות עבר בלבד)
     if c_val > 0:
         conn_act_dates = [last_date] + list(actual_dates)
         conn_act_prices = [last_price] + list(actual_prices)
@@ -284,14 +283,18 @@ def create_forecast_figure(data_dict):
             x=conn_act_dates, y=conn_act_prices, 
             mode="lines", name="מציאות בפועל", 
             line=dict(color='#10b981', width=3),
-            hovertemplate="מציאות: %{y:.2f}<extra></extra>"
+            hovertemplate="מציאות בפועל: %{y:.2f}<extra></extra>"
         ))
         fig.add_vline(x=str(last_date), line_width=2, line_dash="dot", line_color="#94a3b8")
-        fig.add_annotation(x=str(last_date), y=1.05, yref="paper", text="נקודת עיוורון", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
 
-    # יישור לימין, תבנית נקייה והצמדת החלונית
     fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=10, r=10, t=40, b=80))
-    fig.update_xaxes(nticks=25, tickangle=-45, automargin=True)
+    
+    # אכיפת "T+X" על ציר ה-X למטה, במרווחים סבירים כדי לא לצופף
+    if c_val == 0:
+        fig.update_xaxes(tickvals=conn_dates[::10], ticktext=custom_labels[::10], tickangle=-45, automargin=True)
+    else:
+        fig.update_xaxes(nticks=25, tickangle=-45, automargin=True)
+        
     return fig
     
 @st.dialog("📊 גרף מפורט - חיזוי מול מציאות", width="large")
@@ -368,7 +371,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             for meth in methods:
                 status_text.text(f"מנתח שכבת זמן: {name} | שיטה: {meth}...")
                 
-                # בחירת הנתונים בהתאם לשיטה (VWAP או סגירה רגילה)
                 prices_full = df['vwap'].values if meth == "VWAP" else df['close'].values
                 ctx_prices = prices_full[-1024:] if len(prices_full) > 1024 else prices_full
                 last_price = ctx_prices[-1]
@@ -377,21 +379,20 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                     fcst_prices, _, _ = get_forecast(model, ctx_prices, method=meth, horizon=draw_periods)
                     conn_fcst = [last_price] + list(fcst_prices)
                     
-                    if meth == "שערים":
-                        dash_style = "solid"
-                        opac = 1.0
-                    elif meth == "VWAP":
-                        dash_style = "dashdot"
-                        opac = 0.9
-                    else:
-                        dash_style = "dot"
-                        opac = 0.7
+                    # יצירת הנתונים המרחפים (Tooltip) לכל רזולוציית זמן
+                    mtf_labels = ["הווה"] + [f"T+{i+1} ({name})" for i in range(len(fcst_prices))]
+                    
+                    if meth == "שערים": dash_style = "solid"; opac = 1.0
+                    elif meth == "VWAP": dash_style = "dashdot"; opac = 0.9
+                    else: dash_style = "dot"; opac = 0.7
                     
                     fig_mtf.add_trace(go.Scatter(
                         x=conn_dates, y=conn_fcst, mode="lines", 
                         name=f"תחזית {name} ({meth})", 
                         line=dict(color=color, width=2.5, dash=dash_style),
-                        opacity=opac
+                        opacity=opac,
+                        customdata=mtf_labels,
+                        hovertemplate=f"תחזית {name} ({meth}): %{{y:.2f}} | %{{customdata}}<extra></extra>"
                     ))
                 except Exception as e: pass
                 
