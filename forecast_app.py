@@ -36,12 +36,21 @@ st.markdown("<h1 class='main-header'>🤖 מעבדת חיזוי מניות: Time
 st.markdown("<p class='sub-header'>מודל בינה מלאכותית מבית Google לחקר מגמות וביצוע Backtesting בנכסים פיננסיים</p>", unsafe_allow_html=True)
 
 # ==========================================
-# טעינת מודל ה-AI (פעם אחת בלבד לזיכרון)
+# טעינת מודל ה-AI (מעודכן ל-API החדש של גוגל)
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def load_ai_model():
-    tfm = timesfm.TimesFm(context_len=512, horizon_len=128, backend="cpu")
-    tfm.load_from_checkpoint(repo_id="google/timesfm-1.0-200m")
+    tfm = timesfm.TimesFm(
+        hparams=timesfm.TimesFmHparams(
+            backend="cpu",
+            per_core_batch_size=1, # מותאם לשרת חלש
+            horizon_len=128,
+            context_len=512,
+        ),
+        checkpoint=timesfm.TimesFmCheckpoint(
+            huggingface_repo_id="google/timesfm-1.0-200m-pytorch"
+        ),
+    )
     return tfm
 
 # ==========================================
@@ -141,7 +150,8 @@ if st.button("🔮 הפעל מודל חיזוי AI עכשיו", type="primary", 
         prices_array = df_train['close'].values
         
         try:
-            forecast_results, quantiles_results = tfm_model.forecast([prices_array])
+            # הוספנו את הגדרת ה-freq כפי שדורשת הגרסה החדשה
+            forecast_results, quantiles_results = tfm_model.forecast([prices_array], freq=[0])
             
             future_prices = forecast_results[0] 
             lower_bound = quantiles_results[0, :, 0]
@@ -151,7 +161,7 @@ if st.button("🔮 הפעל מודל חיזוי AI עכשיו", type="primary", 
             st.error(f"שגיאה בתהליך החיזוי. ייתכן קריסת זיכרון (OOM): {e}")
             st.stop()
             
-    # יצירת ציר זמן עתידי (החל מהנקודה שבה עצרנו את המודל)
+    # יצירת ציר זמן עתידי
     last_train_date = df_train.index[-1]
     last_train_price = df_train['close'].iloc[-1]
     
@@ -197,14 +207,13 @@ if st.button("🔮 הפעל מודל חיזוי AI עכשיו", type="primary", 
         x=connect_dates, y=connect_prices, mode='lines', name='תחזית AI', line=dict(color='#f59e0b', width=2.5, dash='dash')
     ))
 
-    # קו ההיסטוריה (כחול) - מה שהמודל למד ממנו
+    # קו ההיסטוריה (כחול)
     fig.add_trace(go.Scatter(
         x=display_hist.index, y=display_hist['close'], mode='lines', name='היסטוריה (בסיס לחיזוי)', line=dict(color='#2563eb', width=2)
     ))
 
-    # **הקסם החדש: מה קרה בפועל?** (קו ירוק זוהר)
+    # הקו המציאותי (ירוק זוהר)
     if not df_actual.empty:
-        # מחברים את הקו המציאותי לסוף ההיסטוריה כדי שתהיה רציפות
         actual_dates = [last_train_date] + list(df_actual.index)
         actual_prices = [last_train_price] + list(df_actual['close'])
         
@@ -212,7 +221,6 @@ if st.button("🔮 הפעל מודל חיזוי AI עכשיו", type="primary", 
             x=actual_dates, y=actual_prices, mode='lines', name='מה קרה בפועל? (המציאות)', line=dict(color='#10b981', width=3)
         ))
         
-        # נוסיף קו אנכי שמסמן את נקודת הפיצול (ה"הווה" המדומה)
         fig.add_vline(x=last_train_date, line_width=2, line_dash="dot", line_color="#94a3b8", annotation_text="נקודת החיתוך (כאן המודל עוור)", annotation_position="top left")
     
     title_text = f"חיזוי מסלול מחיר: {asset_name}"
