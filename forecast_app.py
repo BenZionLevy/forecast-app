@@ -138,11 +138,48 @@ if mode == "חיזוי רגיל (עתיד + מבחני עבר)":
     with c_meth:
         calc_method = st.radio("שיטת חישוב:", ["שערים גולמיים", "תשואות באחוזים (מומלץ)"])
 
-    st.markdown("#### ⚖️ שקלול נפח מסחר בחיזוי")
-    volume_weight = st.slider(
-        "מה משקל נפח המסחר בחיזוי? (0 = ללא נפח, 1 = נפח בלבד)",
-        min_value=0.0, max_value=1.0, value=0.3, step=0.05,
-        help="ערך של 0.3 משמעו: 70% מחיר + 30% VWAP מנורמל. נסה ערכים שונים ובדוק את הבקטסט."
+st.markdown("#### ⚖️ שקלול נפח מסחר בחיזוי")
+
+    volume_options = {
+        "0%":   (0.0,  "ללא נפח",   "מחיר בלבד"),
+        "15%":  (0.15, "נפח קל",    "85% מחיר · 15% VWAP"),
+        "30%":  (0.3,  "מאוזן ✓",  "70% מחיר · 30% VWAP"),
+        "50%":  (0.5,  "נפח גבוה", "50% מחיר · 50% VWAP"),
+        "100%": (1.0,  "נפח בלבד", "VWAP בלבד"),
+    }
+
+    st.markdown("""
+    <style>
+    div[data-testid="column"] button {
+        width: 100%;
+        border-radius: 10px;
+        font-family: 'Assistant', sans-serif;
+        font-size: 0.82rem;
+        padding: 0.5rem 0.3rem;
+        transition: all 0.15s;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    if 'volume_pct_key' not in st.session_state:
+        st.session_state['volume_pct_key'] = "30%"
+
+    btn_cols = st.columns(len(volume_options))
+    for col, (pct_label, (val, title, desc)) in zip(btn_cols, volume_options.items()):
+        is_selected = st.session_state['volume_pct_key'] == pct_label
+        btn_type = "primary" if is_selected else "secondary"
+        if col.button(f"{pct_label}\n{title}", key=f"vol_{pct_label}", type=btn_type, use_container_width=True):
+            st.session_state['volume_pct_key'] = pct_label
+
+    selected_val, selected_title, selected_desc = volume_options[st.session_state['volume_pct_key']]
+    volume_weight = selected_val
+
+    st.markdown(
+        f"<div style='background:#fffbeb;border:1.5px solid #fcd34d;border-radius:8px;"
+        f"padding:0.5rem 0.9rem;margin-top:0.4rem;font-size:0.88rem;direction:rtl;'>"
+        f"🎯 <b>נבחר: {st.session_state['volume_pct_key']} משקל נפח</b> — {selected_desc}"
+        f"</div>",
+        unsafe_allow_html=True
     )
 else:
     st.info("🧬 **מצב מחקר מתקדם:** המערכת תריץ במקביל שיטת שערים וגם שיטת תשואות על 3 רזולוציות זמן. נפח מסחר משוקלל אוטומטית.")
