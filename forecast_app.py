@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 # =========================
-# עיצוב בהיר מקצועי (מיושר לימין)
+# עיצוב בהיר מקצועי (אכיפת RTL מוחלטת)
 # =========================
 st.markdown("""
 <style>
@@ -21,6 +21,17 @@ st.markdown("""
 html, body, [class*="css"] {
     font-family: 'Assistant', sans-serif;
     direction: rtl;
+    text-align: right;
+}
+
+div[data-testid="stMarkdownContainer"] {
+    direction: rtl;
+    text-align: right;
+}
+
+div[data-testid="stAlert"] {
+    direction: rtl;
+    text-align: right;
 }
 
 .stApp {
@@ -28,19 +39,19 @@ html, body, [class*="css"] {
 }
 
 .main-title {
-    text-align:right;
-    font-size:2.2rem;
-    font-weight:700;
-    margin-bottom:0.3rem;
+    text-align: right;
+    font-size: 2.2rem;
+    font-weight: 700;
+    margin-bottom: 0.3rem;
 }
 
 .warning-box {
-    background:#fff3cd;
-    border:1px solid #ffeeba;
-    padding:0.8rem;
-    border-radius:8px;
-    margin-bottom:1rem;
-    font-size:0.9rem;
+    background: #fff3cd;
+    border: 1px solid #ffeeba;
+    padding: 0.8rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
     text-align: right;
     direction: rtl;
 }
@@ -111,6 +122,8 @@ with col2:
     resolution_label = st.selectbox("רזולוציית זמן", list(int_map.keys()), index=4)
     interval_choice = int_map[resolution_label]
 
+st.info("💡 המערכת תבצע כעת חיזוי לעתיד, ובנוסף תריץ אוטומטית בדיקות היסטוריות (Backtesting) כדי לבדוק את אמינות המודל בתקופות זמן קודמות.")
+
 # =========================
 # פונקציות משיכה ויצירת גרפים
 # =========================
@@ -134,7 +147,6 @@ def fetch_data(symbol, interval_str):
     df.index = df.index.tz_localize(None) 
     return df[['close']]
 
-# פונקציה לייצור הגרף (מונעת שכפול קוד ומשמשת גם לגרף הראשי וגם לחלון הצף)
 def create_forecast_figure(data_dict):
     ctx_dates, ctx_prices = data_dict['ctx_dates'], data_dict['ctx_prices']
     actual_dates, actual_prices = data_dict['actual_dates'], data_dict['actual_prices']
@@ -152,21 +164,16 @@ def create_forecast_figure(data_dict):
     
     fig = go.Figure()
     
-    # היסטוריה
     fig.add_trace(go.Scatter(x=ctx_dates[-200:], y=ctx_prices[-200:], mode="lines", name="היסטוריה (בסיס לחיזוי)", line=dict(color='#2563eb', width=2)))
-    # גבול עליון לענן
     fig.add_trace(go.Scatter(x=conn_dates, y=conn_upper, mode="lines", line=dict(width=0), showlegend=False, hoverinfo='skip'))
-    # גבול תחתון לענן (ממלא שטח למעלה)
     fig.add_trace(go.Scatter(x=conn_dates, y=conn_lower, mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", line=dict(width=0), name="טווח הסתברות (AI)"))
-    # קו התחזית
     fig.add_trace(go.Scatter(x=conn_dates, y=conn_fcst, mode="lines", name="תחזית AI", line=dict(color='#f59e0b', width=2.5, dash="dash")))
 
-    if c_val > 0: # תוספת מציאות בבדיקת Backtest
+    if c_val > 0:
         conn_act_dates = [last_date] + list(actual_dates)
         conn_act_prices = [last_price] + list(actual_prices)
         fig.add_trace(go.Scatter(x=conn_act_dates, y=conn_act_prices, mode="lines", name="מה קרה בפועל (המציאות)", line=dict(color='#10b981', width=3)))
         
-        # קו הפרדה (נקודת עיוורון)
         fig.add_vline(x=str(last_date), line_width=2, line_dash="dot", line_color="#94a3b8")
         fig.add_annotation(x=str(last_date), y=1.05, yref="paper", text="נקודת עיוורון", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
 
@@ -174,14 +181,13 @@ def create_forecast_figure(data_dict):
         template="plotly_white", 
         hovermode="x unified", 
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), 
-        margin=dict(l=10, r=10, t=40, b=10)
+        margin=dict(l=10, r=10, t=40, b=80) # הוגדל המרווח התחתון כדי למנוע חיתוך תאריכים
     )
-    # אילוץ צפיפות גדולה יותר של תאריכים בציר ה-X עם זווית נוחה לקריאה
-    fig.update_xaxes(nticks=25, tickangle=-45)
+    # אילוץ צפיפות גדולה יותר והגדרת automargin למניעת הסתרה
+    fig.update_xaxes(nticks=25, tickangle=-45, automargin=True)
 
     return fig
 
-# חלון צף להצגת גרף כשלוחצים על שורה בטבלה ההיסטורית
 @st.dialog("📊 גרף בדיקת עבר - מודל חיזוי מול מציאות", width="large")
 def show_chart_dialog(c_idx):
     data = st.session_state['backtest_data'][c_idx]
@@ -201,7 +207,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         st.error("❌ אין מספיק נתונים עבור הנכס הזה (דרושים לפחות 600 תצפיות לעבודה תקינה).")
         st.stop()
 
-    # הגדרת תקופות זמן בהתאם לרזולוציה
     if interval_choice == "1d":
         unit = "ימי מסחר"
         test_cutoffs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 63, 126]
@@ -245,14 +250,12 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                 fcst_lower = quant_res[0, :, 0]
                 fcst_upper = quant_res[0, :, -1]
 
-                # יצירת ציר זמן עתידי מדויק לפי רזולוציה
                 if interval_choice == "1d": fcst_dates = pd.bdate_range(start=last_date, periods=129)[1:]
                 elif interval_choice == "1W": fcst_dates = pd.date_range(start=last_date, periods=129, freq="W")[1:]
                 else:
                     freq_str = interval_choice.replace('m', 'min')
                     fcst_dates = pd.date_range(start=last_date, periods=129, freq=freq_str)[1:]
 
-                # חישוב אחוזי הצלחה לתקופות עבר
                 if c > 0:
                     pred_for_actual = fcst_prices[:c]
                     mape = np.mean(np.abs((actual_prices - pred_for_actual) / actual_prices)) * 100
@@ -267,17 +270,16 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                     mape_str = "---"
                     is_correct = None
 
-                # נוסיף לטבלה רק את שורות ה-Backtest (העתיד מוצג בגרף נפרד למעלה)
                 if c > 0:
                     results_list.append({
-                        "נקודת התחלה": label,
-                        "סטייה מהמציאות (MAPE)": mape_str,
+                        "פעולה": "📊 הצג גרף",
+                        "נקודת התחלה (בדיקת עבר)": label,
+                        "סטייה ממוצעת מהמציאות (MAPE)": mape_str,
                         "זיהוי כיוון מגמה": trend_str,
                         "_c_val": c,
                         "_is_correct": is_correct
                     })
 
-                # שמירת הנתונים לטובת ציור הגרף (עתידי וחלונות צפים)
                 st.session_state['backtest_data'][c] = {
                     'ctx_dates': ctx_dates, 'ctx_prices': ctx_prices,
                     'actual_dates': actual_dates, 'actual_prices': actual_prices,
@@ -299,19 +301,17 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         st.session_state['run_done'] = True
 
 # =========================
-# תצוגת התוצאות (גרף עתידי ואז טבלה)
+# תצוגת התוצאות
 # =========================
 if st.session_state.get('run_done'):
     
-    # 1. הצגת גרף החיזוי העתידי (האמיתי) בגדול למעלה
     st.markdown("### 📈 תחזית עתידית (מהיום והלאה)")
-    future_data = st.session_state['backtest_data'][0] # אינדקס 0 זה ההווה
+    future_data = st.session_state['backtest_data'][0]
     fig_future = create_forecast_figure(future_data)
     st.plotly_chart(fig_future, use_container_width=True)
     
     st.divider()
 
-    # 2. הצגת טבלת האמינות (Backtesting) ממתחת
     df_res = st.session_state['results_df']
 
     correct_count = sum(1 for x in df_res['_is_correct'] if x == True)
@@ -328,7 +328,7 @@ if st.session_state.get('run_done'):
     styled_df = display_df.style.map(style_trend, subset=["זיהוי כיוון מגמה"])
 
     st.markdown("### 🔬 מבחני אמינות למודל (Backtesting)")
-    st.markdown("**לחץ על שורה בטבלה כדי לפתוח את החיזוי מול המציאות בגרף מפורט** 👇")
+    st.info("💡 **הוראות:** לחץ על שורה בטבלה כדי לפתוח את הגרף שלה ולראות את החיזוי מול המציאות.")
 
     event = st.dataframe(
         styled_df,
@@ -351,6 +351,18 @@ if st.session_state.get('run_done'):
             st.error(f"⚠️ **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (המודל מתקשה לקרוא את הנכס הזה, לא מומלץ להסתמך עליו כאן)")
         else:
             st.warning(f"⚖️ **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (תוצאה בינונית - כדאי לשלב כלים נוספים בהחלטה)")
+
+    with st.expander("❓ איך מחושבת 'הסטייה מהמציאות' (MAPE)?"):
+        st.markdown("""
+        **MAPE (Mean Absolute Percentage Error)** הוא מדד סטטיסטי שמראה בכמה אחוזים המודל "פספס" בממוצע.
+        
+        **דוגמה פשוטה:**
+        אם המניה סגרה בפועל במחיר של **100 שקלים**, אבל המודל חזה שהיא תגיע ל-**105 שקלים**, הסטייה היא של **5%**.
+        המדד לוקח את כל הסטיות היומיות לאורך התקופה שנבדקה, ומציג את הממוצע שלהן.
+        
+        * **סטייה נמוכה (למשל 1%-3%):** המודל היה מדויק מאוד וקרוב לקו המציאות.
+        * **סטייה גבוהה (למשל מעל 10%):** המודל התקשה לחזות את התנודתיות, או שהתרחש אירוע בלתי צפוי בשוק.
+        """)
 
 st.divider()
 st.markdown("""
