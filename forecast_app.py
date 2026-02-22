@@ -12,7 +12,7 @@ st.set_page_config(
 )
 
 # =========================
-# עיצוב בהיר מקצועי (מתוקן לימין)
+# עיצוב בהיר מקצועי (מיושר לימין)
 # =========================
 st.markdown("""
 <style>
@@ -56,7 +56,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# מודל AI
+# טעינת מודל AI (נשמר בזיכרון)
 # =========================
 @st.cache_resource(show_spinner=False)
 def load_model():
@@ -73,7 +73,7 @@ def load_model():
     )
 
 # =========================
-# נכסים לבחירה (כולל מאקרו)
+# נכסים לבחירה
 # =========================
 ASSETS = {
     "לאומי": ("LUMI", "TASE"),
@@ -111,20 +111,10 @@ with col2:
     resolution_label = st.selectbox("רזולוציית זמן", list(int_map.keys()), index=4)
     interval_choice = int_map[resolution_label]
 
-mode = st.radio(
-    "סוג חיזוי",
-    ["חיזוי עתידי (מהיום והלאה)", "בדיקה היסטורית בודדת למחקר ממוקד"],
-    horizontal=True
-)
-
-cutoff = 0
-
-if mode == "בדיקה היסטורית בודדת למחקר ממוקד":
-    st.info("💡 בחר כמה נרות (תצפיות) להסתיר מהמודל כדי לבחון את הדיוק שלו מול מה שקרה בפועל.")
-    cutoff = st.number_input("כמה נרות לחזור אחורה אל תוך העבר?", min_value=1, max_value=128, value=30)
+st.info("💡 המערכת תבצע כעת חיזוי לעתיד, ובנוסף תריץ אוטומטית בדיקות היסטוריות (Backtesting) כדי לבדוק את אמינות המודל בתקופות זמן קודמות.")
 
 # =========================
-# משיכת נתונים
+# פונקציות משיכה וחלון צף (Popup)
 # =========================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_data(symbol, interval_str):
@@ -138,209 +128,208 @@ def fetch_data(symbol, interval_str):
         "1W": Interval.in_weekly
     }
     inter = tv_intervals.get(interval_str, Interval.in_daily)
-
     df = tv.get_hist(symbol=symbol[0], exchange=symbol[1], interval=inter, n_bars=1500)
-
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    if df.index.tz is None:
-        df.index = df.index.tz_localize("UTC").tz_convert("Asia/Jerusalem")
-    else:
-        df.index = df.index.tz_convert("Asia/Jerusalem")
-
+    
+    if df is None or df.empty: return pd.DataFrame()
+    if df.index.tz is None: df.index = df.index.tz_localize("UTC").tz_convert("Asia/Jerusalem")
+    else: df.index = df.index.tz_convert("Asia/Jerusalem")
     df.index = df.index.tz_localize(None) 
     return df[['close']]
 
+# חלון צף להצגת גרף כשלוחצים על שורה בטבלה
+@st.dialog("📊 גרף מפורט - מודל חיזוי", width="large")
+def show_chart_dialog(c_idx):
+    data = st.session_state['backtest_data'][c_idx]
+    
+    ctx_dates, ctx_prices = data['ctx_dates'], data['ctx_prices']
+    actual_dates, actual_prices = data['actual_dates'], data['actual_prices']
+    fcst_dates, fcst_prices = data['fcst_dates'], data['fcst_prices']
+    fcst_lower, fcst_upper = data['fcst_lower'], data['fcst_upper']
+    c_val = data['c_val']
+    
+    last_date = ctx_dates[-1]
+    last_price = ctx_prices[-1]
+    
+    conn_dates = [last_date] + list(fcst_dates)
+    conn_fcst = [last_price] + list(fcst_prices)
+    conn_lower = [last_price] + list(fcst_lower)
+    conn_upper = [last_price] + list(fcst_upper)
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(x=ctx_dates[-200:], y=ctx_prices[-200:], mode="lines", name="היסטוריה (בסיס לחיזוי)", line=dict(color='#2563eb', width=2)))
+    fig.add_trace(go.Scatter(x=conn_dates, y=conn_upper, mode="lines", line=dict(width=0), showlegend=False, hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=conn_dates, y=conn_lower, mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", line=dict(width=0), name="טווח הסתברות (AI)"))
+    fig.add_trace(go.Scatter(x=conn_dates, y=conn_fcst, mode="lines", name="תחזית AI", line=dict(color='#f59e0b', width=2.5, dash="dash")))
+
+    if c_val > 0: # אם זה לא חיזוי עתידי אמיתי, אלא בדיקת עבר
+        conn_act_dates = [last_date] + list(actual_dates)
+        conn_act_prices = [last_price] + list(actual_prices)
+        fig.add_trace(go.Scatter(x=conn_act_dates, y=conn_act_prices, mode="lines", name="מה קרה בפועל (המציאות)", line=dict(color='#10b981', width=3)))
+        
+        # קו הפרדה (נקודת עיוורון)
+        fig.add_vline(x=str(last_date), line_width=2, line_dash="dot", line_color="#94a3b8")
+        fig.add_annotation(x=str(last_date), y=1.05, yref="paper", text="נקודת עיוורון", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
+
+    fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=10, r=10, t=40, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
 # =========================
-# הפעלה ועיבוד
+# הפעלת הלולאה המרכזית
 # =========================
-if st.button("🚀 הפעל חיזוי AI עכשיו", type="primary", use_container_width=True):
+if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_container_width=True):
 
     with st.spinner("טוען מודל ומושך נתונים מ-TradingView..."):
         model = load_model()
         df = fetch_data(ASSETS[stock], interval_choice)
 
-    if df.empty or (len(df) - cutoff) < 512:
-        st.error("❌ אין מספיק נתונים לצורך חיזוי. המודל דורש מינימום 512 נרות היסטוריים פנויים.")
+    if df.empty or len(df) < 600:
+        st.error("❌ אין מספיק נתונים עבור הנכס הזה (דרושים לפחות 600 תצפיות לעבודה תקינה).")
         st.stop()
 
-    if cutoff > 0:
-        train = df.iloc[:-cutoff]
-        actual = df.iloc[-cutoff:]
-    else:
-        train = df
-        actual = pd.DataFrame()
-
-    with st.spinner("ה-AI מנתח תבניות היסטוריות ומחשב תחזית..."):
-        forecast, quant = model.forecast([train['close'].values], freq=[0])
-        forecast = forecast[0]
-        lower = quant[0, :, 0]
-        upper = quant[0, :, -1]
-
-    last_date = train.index[-1]
-    last_price = train['close'].iloc[-1]
-
+    # הגדרת תקופות זמן בהתאם לרזולוציה
     if interval_choice == "1d":
-        future_dates = pd.bdate_range(start=last_date, periods=129)[1:]
-    elif interval_choice == "1W":
-        future_dates = pd.date_range(start=last_date, periods=129, freq="W")[1:]
+        unit = "ימי מסחר"
+        test_cutoffs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 63, 126]
+        test_labels = ["עכשיו (חיזוי עתידי אמיתי)"] + [f"{c} {unit} אחורה" for c in test_cutoffs[1:11]] + ["חודש (21 ימים) אחורה", "3 חודשים (63 ימים) אחורה", "חצי שנה (126 ימים) אחורה"]
     else:
-        freq_str = interval_choice.replace('m', 'min')
-        future_dates = pd.date_range(start=last_date, periods=129, freq=freq_str)[1:]
+        unit = "תקופות זמן"
+        test_cutoffs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 50, 100]
+        test_labels = ["עכשיו (חיזוי עתידי אמיתי)"] + [f"{c} {unit} אחורה" for c in test_cutoffs[1:]]
 
-    conn_dates = [last_date] + list(future_dates)
-    conn_forecast = [last_price] + list(forecast)
-    conn_lower = [last_price] + list(lower)
-    conn_upper = [last_price] + list(upper)
+    st.session_state['test_cutoffs'] = test_cutoffs
+    st.session_state['backtest_data'] = {}
+    results_list = []
 
-    # =========================
-    # ויזואליזציה (גרף מרכזי)
-    # =========================
-    fig = go.Figure()
+    prices_full = df['close'].values
+    dates_full = df.index
 
-    fig.add_trace(go.Scatter(
-        x=train.index[-200:], y=train['close'].tail(200),
-        mode="lines", name="היסטוריה (בסיס לחיזוי)", line=dict(color='#2563eb', width=2)
-    ))
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-    fig.add_trace(go.Scatter(
-        x=conn_dates, y=conn_upper,
-        mode="lines", line=dict(width=0), showlegend=False, hoverinfo='skip'
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=conn_dates, y=conn_lower,
-        mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)",
-        line=dict(width=0), name="טווח הסתברות (AI)"
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=conn_dates, y=conn_forecast,
-        mode="lines", name="תחזית AI", line=dict(color='#f59e0b', width=2.5, dash="dash")
-    ))
-
-    if not actual.empty:
-        conn_act_dates = [last_date] + list(actual.index)
-        conn_act_prices = [last_price] + list(actual['close'])
+    for i, (c, label) in enumerate(zip(test_cutoffs, test_labels)):
+        status_text.text(f"מחשב מודל עבור: {label}...")
         
-        fig.add_trace(go.Scatter(
-            x=conn_act_dates, y=conn_act_prices,
-            mode="lines", name="מה קרה בפועל (המציאות)", line=dict(color='#10b981', width=3)
-        ))
-        
-        fig.add_vline(x=last_date, line_width=2, line_dash="dot", line_color="#94a3b8")
-        fig.add_annotation(x=last_date, y=1.05, yref="paper", text="נקודת עיוורון", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
-
-    fig.update_layout(
-        template="plotly_white", hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=10, r=10, t=40, b=10)
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
-
-    # =========================
-    # בדיקת ביצועים לבדיקה בודדת
-    # =========================
-    if not actual.empty:
-        pred_for_actual = forecast[:cutoff]
-        actual_vals = actual['close'].values
-
-        mape = np.mean(np.abs((actual_vals - pred_for_actual) / actual_vals)) * 100
-        actual_direction = actual_vals[-1] - last_price
-        pred_direction = pred_for_actual[-1] - last_price
-        
-        is_trend_correct = (actual_direction > 0 and pred_direction > 0) or (actual_direction < 0 and pred_direction < 0)
-        trend_text = "✅ הצלחה (חזה נכון)" if is_trend_correct else "❌ כישלון (טעה בכיוון)"
-
-        st.markdown("### 📊 תוצאות מבחן המציאות שהרצת")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("סטייה ממוצעת מהמציאות (MAPE)", f"{mape:.2f}%")
-        c2.metric("זיהוי מגמה", trend_text)
-        c3.info("💡 **MAPE** נמוך יותר = המודל היה מדויק. **זיהוי מגמה** בודק אם המודל חזה נכון אם הנכס יעלה או ירד בסוף התקופה.")
-
-    # =========================
-    # טבלת אמינות אוטומטית (מופיעה רק במצב חיזוי עתידי)
-    # =========================
-    elif cutoff == 0:
-        st.divider()
-        st.markdown("### 🔬 טבלת אמינות היסטורית (Backtesting אוטומטי)")
-        st.info("המערכת בוחנת כעת כיצד המודל היה מתפקד אם היינו מריצים אותו בנקודות זמן שונות בעבר. (הפעולה עשויה לקחת כדקה)")
-        
-        prices_full = df['close'].values
-        
-        # הגדרת הטווחי זמן לבדיקה בהתאם לרזולוציה
-        if interval_choice == "1d":
-            test_cutoffs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 126]
-            test_labels = ["1 ימים", "2 ימים", "3 ימים", "4 ימים", "5 ימים", "6 ימים", "7 ימים", "8 ימים", "9 ימים", "10 ימים", "חודש (21 ימים)", "חצי שנה (126 ימים)"]
-        else:
-            test_cutoffs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 50, 100]
-            test_labels = [f"{c} נרות אחורה" for c in test_cutoffs]
-
-        results_list = []
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        for i, (c, label) in enumerate(zip(test_cutoffs, test_labels)):
-            if len(prices_full) - c >= 512:
-                status_text.text(f"בודק אמינות: חוזר {label} אחורה...")
-                
-                # יצירת הנתונים המוסתרים
+        if len(prices_full) - c >= 512:
+            if c > 0:
                 ctx_prices = prices_full[:-c]
-                actual_hidden = prices_full[-c:]
-                last_known_val = prices_full[-(c + 1)]
-                
-                try:
-                    # מריצים את החיזוי על העבר המדומה
-                    test_forecast, _ = model.forecast([ctx_prices], freq=[0])
-                    test_pred = test_forecast[0][:c]
-                    
-                    # חישוב הסטייה
-                    test_mape = np.mean(np.abs((actual_hidden - test_pred) / actual_hidden)) * 100
-                    
-                    # בדיקת כיוון המגמה
-                    act_dir = actual_hidden[-1] - last_known_val
-                    pred_dir = test_pred[-1] - last_known_val
+                ctx_dates = dates_full[:-c]
+                actual_prices = prices_full[-c:]
+                actual_dates = dates_full[-c:]
+            else:
+                ctx_prices = prices_full
+                ctx_dates = dates_full
+                actual_prices = []
+                actual_dates = []
+
+            last_date = ctx_dates[-1]
+            last_price = ctx_prices[-1]
+
+            try:
+                forecast_res, quant_res = model.forecast([ctx_prices], freq=[0])
+                fcst_prices = forecast_res[0]
+                fcst_lower = quant_res[0, :, 0]
+                fcst_upper = quant_res[0, :, -1]
+
+                # יצירת ציר זמן עתידי מדויק לפי רזולוציה
+                if interval_choice == "1d": fcst_dates = pd.bdate_range(start=last_date, periods=129)[1:]
+                elif interval_choice == "1W": fcst_dates = pd.date_range(start=last_date, periods=129, freq="W")[1:]
+                else:
+                    freq_str = interval_choice.replace('m', 'min')
+                    fcst_dates = pd.date_range(start=last_date, periods=129, freq=freq_str)[1:]
+
+                # חישוב אחוזי הצלחה לתקופות עבר
+                if c > 0:
+                    pred_for_actual = fcst_prices[:c]
+                    mape = np.mean(np.abs((actual_prices - pred_for_actual) / actual_prices)) * 100
+                    act_dir = actual_prices[-1] - last_price
+                    pred_dir = pred_for_actual[-1] - last_price
                     is_correct = (act_dir > 0 and pred_dir > 0) or (act_dir < 0 and pred_dir < 0)
                     
-                    results_list.append({
-                        "טווח זמן שנבדק": label,
-                        "סטייה ממוצעת מהמציאות (MAPE)": test_mape,
-                        "זיהוי כיוון המגמה": "✅ קלע לכיוון" if is_correct else "❌ טעה בכיוון"
-                    })
-                except:
-                    pass
-                    
-            progress_bar.progress((i + 1) / len(test_cutoffs))
-            
-        status_text.empty()
-        progress_bar.empty()
-        
-        if results_list:
-            res_df = pd.DataFrame(results_list)
-            
-            # חישוב אחוז ההצלחה הכללי (Win Rate)
-            correct_count = sum(1 for r in results_list if "✅" in r["זיהוי כיוון המגמה"])
-            win_rate = (correct_count / len(results_list)) * 100
-            
-            # עיצוב הטבלה
-            def style_trend(val):
-                if "✅" in val: return 'color: #047857; font-weight: bold;'
-                if "❌" in val: return 'color: #b91c1c;'
-                return ''
+                    trend_str = "✅ קלע לכיוון" if is_correct else "❌ טעה בכיוון"
+                    mape_str = f"{mape:.2f}%"
+                else:
+                    trend_str = "⏳ ממתין לעתיד"
+                    mape_str = "---"
+                    is_correct = None
+
+                results_list.append({
+                    "נקודת התחלה": label,
+                    "סטייה מהמציאות (MAPE)": mape_str,
+                    "זיהוי כיוון מגמה": trend_str,
+                    "_c_val": c,
+                    "_is_correct": is_correct
+                })
+
+                # שמירת הנתונים לטובת החלון הצף
+                st.session_state['backtest_data'][c] = {
+                    'ctx_dates': ctx_dates, 'ctx_prices': ctx_prices,
+                    'actual_dates': actual_dates, 'actual_prices': actual_prices,
+                    'fcst_dates': fcst_dates, 'fcst_prices': fcst_prices,
+                    'fcst_lower': fcst_lower, 'fcst_upper': fcst_upper,
+                    'c_val': c, 'label': label
+                }
+
+            except Exception as e:
+                pass # מדלג בשקט אם המודל נכשל ספציפית בתקופה מסוימת
                 
-            styled_df = res_df.style.format({"סטייה ממוצעת מהמציאות (MAPE)": "{:.2f}%"}).map(style_trend, subset=["זיהוי כיוון המגמה"])
-            
-            st.dataframe(styled_df, use_container_width=True, hide_index=True)
-            
-            if win_rate > 60:
-                st.success(f"🏆 **ציון אמינות כללי למודל על נכס זה: {win_rate:.0f}% הצלחה בזיהוי כיוון.** (המודל נחשב כאמין יחסית למניה זו).")
-            elif win_rate < 40:
-                st.error(f"⚠️ **ציון אמינות כללי למודל על נכס זה: {win_rate:.0f}% הצלחה בזיהוי כיוון.** (לא מומלץ להסתמך על החיזוי העתידי במקרה הזה).")
-            else:
-                st.warning(f"⚖️ **ציון אמינות כללי למודל על נכס זה: {win_rate:.0f}% הצלחה בזיהוי כיוון.** (תוצאה בינונית - כדאי לשלב כלים נוספים).")
+        progress_bar.progress((i + 1) / len(test_cutoffs))
+
+    status_text.empty()
+    progress_bar.empty()
+
+    if results_list:
+        st.session_state['results_df'] = pd.DataFrame(results_list)
+        st.session_state['run_done'] = True
+
+# =========================
+# הצגת הטבלה ולכידת לחיצה
+# =========================
+if st.session_state.get('run_done'):
+    df_res = st.session_state['results_df']
+
+    # חישוב אחוז הצלחה (Win Rate)
+    correct_count = sum(1 for x in df_res['_is_correct'] if x == True)
+    total_tests = sum(1 for x in df_res['_is_correct'] if x is not None)
+    win_rate = (correct_count / total_tests) * 100 if total_tests > 0 else 0
+
+    display_df = df_res.drop(columns=['_c_val', '_is_correct'])
+
+    def style_trend(val):
+        if "✅" in str(val): return 'color: #047857; font-weight: bold;'
+        if "❌" in str(val): return 'color: #b91c1c;'
+        if "⏳" in str(val): return 'color: #3b82f6; font-weight: bold;'
+        return ''
+
+    styled_df = display_df.style.map(style_trend, subset=["זיהוי כיוון מגמה"])
+
+    st.markdown("### 📋 תוצאות הבדיקות: **לחץ על שורה בטבלה כדי לפתוח את הגרף שלה** 👇")
+
+    # טבלה אינטראקטיבית
+    event = st.dataframe(
+        styled_df,
+        use_container_width=True,
+        hide_index=True,
+        selection_mode="single-row",
+        on_select="rerun",
+        key="backtest_table"
+    )
+
+    # פתיחת החלון הצף בלחיצה על שורה
+    if len(event.selection.rows) > 0:
+        selected_row_idx = event.selection.rows[0]
+        selected_c = df_res.iloc[selected_row_idx]['_c_val']
+        show_chart_dialog(selected_c)
+
+    # סיכום מילולי ואזהרה למטה
+    st.divider()
+    if total_tests > 0:
+        if win_rate >= 60:
+            st.success(f"🏆 **ציון אמינות למודל:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (נחשב למודל יציב ואמין עבור הנכס הזה)")
+        elif win_rate <= 40:
+            st.error(f"⚠️ **ציון אמינות למודל:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (המודל מתקשה לקרוא את הנכס הזה, לא מומלץ להסתמך עליו כאן)")
+        else:
+            st.warning(f"⚖️ **ציון אמינות למודל:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (תוצאה בינונית - כדאי לשלב כלים נוספים בהחלטה)")
 
 st.divider()
 st.markdown("""
