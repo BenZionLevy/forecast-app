@@ -460,12 +460,22 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
 
         if interval_choice == "1d":
             unit = "ימי מסחר"
-            test_cutoffs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 21, 63, 126]
-            test_labels = ["חיזוי עתידי אמיתי (היום והלאה)"] + [f"{c} {unit} אחורה" for c in test_cutoffs[1:11]] + ["חודש (21 ימים) אחורה", "3 חודשים (63 ימים) אחורה", "חצי שנה (126 ימים) אחורה"]
+            # קפיצות הגיוניות של שבועות וחודשים (עד חצי שנה שזה 126 ימי מסחר)
+            test_cutoffs = [0, 5, 10, 15, 21, 42, 63, 84, 105, 126]
+            labels_dict = {
+                5: "שבוע (5 ימים) אחורה", 
+                10: "שבועיים (10 ימים) אחורה", 
+                21: "חודש (21 ימים) אחורה", 
+                42: "חודשיים (42 ימים) אחורה", 
+                63: "3 חודשים (63 ימים) אחורה", 
+                126: "חצי שנה (126 ימים) אחורה"
+            }
+            test_labels = [labels_dict.get(c, f"{c} {unit} אחורה") if c > 0 else "חיזוי עתידי אמיתי (היום והלאה)" for c in test_cutoffs]
         else:
-            unit = "תקופות זמן"
-            test_cutoffs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 50, 100]
-            test_labels = ["חיזוי עתידי אמיתי (היום והלאה)"] + [f"{c} {unit} אחורה" for c in test_cutoffs[1:]]
+            unit = "נרות"
+            # תוך-יומי: קפיצות של 10 לפי ההצעה שלך (עד 120, הגבול העליון של חלון החיזוי)
+            test_cutoffs = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]
+            test_labels = ["חיזוי עתידי אמיתי (היום והלאה)"] + [f"{c} {unit} אחורה ({c} כפול {resolution_label})" for c in test_cutoffs[1:]]
 
         st.session_state['test_cutoffs'] = test_cutoffs
         st.session_state['backtest_data'] = {}
