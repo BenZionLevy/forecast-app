@@ -129,7 +129,47 @@ if mode == "בדיקה היסטורית (Backtest)":
     st.info("💡 בחר כמה תצפיות להסתיר מהמודל כדי לבחון את הדיוק שלו מול מה שקרה בפועל.")
     cutoff = st.number_input("כמה נרות לחזור אחורה אל תוך העבר?", min_value=1, max_value=128, value=30)
 elif mode == "חיזוי רב-שכבתי (Multi-Timeframe)":
-    st.info("🧬 **מצב מחקר מתקדם:** המערכת תמשוך נתונים ותריץ 3 תחזיות במקביל (יומי, שעתי, 15 דקות) ותציג את כולן על גרף משותף כדי לזהות הצטלבויות של מגמות בטווח הקצר והארוך.")
+    st.info("🧬 **מצב מחקר מתקדם:** מציג את ההצטלבות בין המגמה הקצרה לארוכה. הגרפים נחתכו בצורה חכמה כדי שיהיה אפשר לראות את כולם מקרוב.")
+
+# =========================
+# מנוע תאריכים מותאם לבורסה
+# =========================
+def generate_israel_trading_dates(start_date, periods, tf):
+    """
+    מייצר תאריכים עתידיים תוך דילוג על שישי-שבת.
+    ברזולוציה תוך יומית, מדלג על שעות הלילה ומתמקד ב-10:00 עד 17:00.
+    """
+    dates = []
+    curr = start_date
+    
+    # הגדרת קפיצת הזמן (Step)
+    if tf == "60m": step = pd.Timedelta(hours=1)
+    elif tf == "30m": step = pd.Timedelta(minutes=30)
+    elif tf == "15m": step = pd.Timedelta(minutes=15)
+    elif tf == "5m": step = pd.Timedelta(minutes=5)
+    elif tf == "1W": step = pd.Timedelta(weeks=1)
+    else: step = pd.Timedelta(days=1)
+    
+    while len(dates) < periods:
+        curr += step
+        
+        # שבועי פשוט קופץ קדימה
+        if tf == "1W":
+            dates.append(curr)
+            continue
+            
+        # ימי מסחר בישראל: ראשון(6), שני(0), שלישי(1), רביעי(2), חמישי(3)
+        is_trading_day = curr.weekday() in [6, 0, 1, 2, 3]
+        
+        if tf == "1d":
+            if is_trading_day:
+                dates.append(curr)
+        else: # רזולוציה תוך יומית (שעות/דקות)
+            is_trading_hour = 10 <= curr.hour < 17
+            if is_trading_day and is_trading_hour:
+                dates.append(curr)
+                
+    return dates
 
 # =========================
 # פונקציות משיכה ויצירת גרפים
@@ -137,14 +177,7 @@ elif mode == "חיזוי רב-שכבתי (Multi-Timeframe)":
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_data(symbol, interval_str):
     tv = TvDatafeed()
-    tv_intervals = {
-        "5m": Interval.in_5_minute,
-        "15m": Interval.in_15_minute,
-        "30m": Interval.in_30_minute,
-        "60m": Interval.in_1_hour,
-        "1d": Interval.in_daily,
-        "1W": Interval.in_weekly
-    }
+    tv_intervals = {"5m": Interval.in_5_minute, "15m": Interval.in_15_minute, "30m": Interval.in_30_minute, "60m": Interval.in_1_hour, "1d": Interval.in_daily, "1W": Interval.in_weekly}
     inter = tv_intervals.get(interval_str, Interval.in_daily)
     df = tv.get_hist(symbol=symbol[0], exchange=symbol[1], interval=inter, n_bars=4000)
     
@@ -180,16 +213,10 @@ def create_forecast_figure(data_dict):
         conn_act_dates = [last_date] + list(actual_dates)
         conn_act_prices = [last_price] + list(actual_prices)
         fig.add_trace(go.Scatter(x=conn_act_dates, y=conn_act_prices, mode="lines", name="מה קרה בפועל (המציאות)", line=dict(color='#10b981', width=3)))
-        
         fig.add_vline(x=str(last_date), line_width=2, line_dash="dot", line_color="#94a3b8")
         fig.add_annotation(x=str(last_date), y=1.05, yref="paper", text="נקודת עיוורון", showarrow=False, font=dict(color="#94a3b8", size=12), xanchor="center")
 
-    fig.update_layout(
-        template="plotly_white", 
-        hovermode="x unified", 
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), 
-        margin=dict(l=10, r=10, t=40, b=80) 
-    )
+    fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=10, r=10, t=40, b=80))
     fig.update_xaxes(nticks=25, tickangle=-45, automargin=True)
 
     return fig
@@ -214,14 +241,14 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         tfs = {"1d": ("יומי", "#f59e0b"), "60m": ("שעתי", "#8b5cf6"), "15m": ("15 דקות", "#ef4444")}
         
         fig_mtf = go.Figure()
-        
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         # כדי לצייר היסטוריה אחידה ויפה ברקע, נשתמש בגרף השעתי כבסיס
         bg_df = fetch_data(ASSETS[stock], "60m")
         if not bg_df.empty:
-            fig_mtf.add_trace(go.Scatter(x=bg_df.index[-400:], y=bg_df['close'].tail(400), mode="lines", name="היסטוריה (מבט שעתי)", line=dict(color='#cbd5e1', width=1.5)))
+            # נמשוך רק את 150 השעות האחרונות להיסטוריה כדי להתמקד בעתיד
+            fig_mtf.add_trace(go.Scatter(x=bg_df.index[-150:], y=bg_df['close'].tail(150), mode="lines", name="היסטוריה קרובה", line=dict(color='#cbd5e1', width=1.5)))
 
         for i, (tf, (name, color)) in enumerate(tfs.items()):
             status_text.text(f"מנתח שכבת זמן: {name}...")
@@ -237,12 +264,17 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             
             try:
                 forecast_res, _ = model.forecast([ctx_prices], freq=[0])
-                fcst_prices = forecast_res[0]
                 
-                # בניית תאריכים עתידיים בהתאם לרזולוציה הנוכחית בלולאה
-                if tf == "1d": fcst_dates = pd.bdate_range(start=last_date, periods=129)[1:]
-                elif tf == "60m": fcst_dates = pd.date_range(start=last_date, periods=129, freq="H")[1:]
-                else: fcst_dates = pd.date_range(start=last_date, periods=129, freq="15min")[1:]
+                # כאן אנחנו חותכים את התחזיות הארוכות כדי שכולן יתיישבו יפה על המסך
+                if tf == "1d": 
+                    draw_periods = 25  # מציג בערך חודש קדימה
+                elif tf == "60m": 
+                    draw_periods = 80  # מציג בערך 10 ימי מסחר קדימה
+                else: 
+                    draw_periods = 128 # מציג בערך 3-4 ימי מסחר קדימה
+                
+                fcst_prices = forecast_res[0][:draw_periods]
+                fcst_dates = generate_israel_trading_dates(last_date, draw_periods, tf)
                 
                 conn_dates = [last_date] + list(fcst_dates)
                 conn_fcst = [last_price] + list(fcst_prices)
@@ -259,7 +291,7 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         
         fig_mtf.update_layout(
             template="plotly_white", hovermode="x unified", title_x=0.5,
-            title=f"תצוגה רב-שכבתית: התכנסות מגמות קצרות וארוכות ({stock})",
+            title=f"תצוגה רב-שכבתית: הצטלבות מגמות ({stock})",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), 
             margin=dict(l=10, r=10, t=40, b=80) 
         )
@@ -268,9 +300,9 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         st.markdown("### 🧬 תרשים רב-שכבתי (Multi-Timeframe)")
         st.plotly_chart(fig_mtf, use_container_width=True)
         
-        st.info("💡 **איך קוראים את זה?** הקו הכתום (יומי) מראה לאן המניה צועדת בחודשים הקרובים. הקו הסגול והאדום מראים את המסלול הקופצני יותר שהמניה תעשה בימים ובשבועות הקרובים כדי להגיע לשם.")
+        st.info("💡 הקו הכתום קוצר כדי שתוכל לעשות 'זום-אין' ולראות בבירור את התנועה העדינה של הגרף השעתי וה-15 דקות.")
 
-    # מסלול 2: חיזוי רגיל או Backtesting יחיד או טבלת אמינות
+    # מסלול 2: חיזוי רגיל או Backtesting יחיד
     else:
         df = fetch_data(ASSETS[stock], interval_choice)
 
@@ -287,7 +319,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             test_cutoffs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 50, 100]
             test_labels = ["חיזוי עתידי אמיתי (היום והלאה)"] + [f"{c} {unit} אחורה" for c in test_cutoffs[1:]]
 
-        # אם המשתמש בחר בבדיקה היסטורית בודדת - אנחנו עוקפים את הלולאה הארוכה ובודקים רק את המספר שהוא הזין
         if mode == "בדיקה היסטורית (Backtest)":
             test_cutoffs = [cutoff]
             test_labels = [f"בדיקה ספציפית ({cutoff} תצפיות אחורה)"]
@@ -326,11 +357,8 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                     fcst_lower = quant_res[0, :, 0]
                     fcst_upper = quant_res[0, :, -1]
 
-                    if interval_choice == "1d": fcst_dates = pd.bdate_range(start=last_date, periods=129)[1:]
-                    elif interval_choice == "1W": fcst_dates = pd.date_range(start=last_date, periods=129, freq="W")[1:]
-                    else:
-                        freq_str = interval_choice.replace('m', 'min')
-                        fcst_dates = pd.date_range(start=last_date, periods=129, freq=freq_str)[1:]
+                    # שימוש בפונקציית התאריכים הישראלית החדשה
+                    fcst_dates = generate_israel_trading_dates(last_date, 128, interval_choice)
 
                     if c > 0:
                         pred_for_actual = fcst_prices[:c]
@@ -378,7 +406,7 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             st.session_state['run_mode'] = mode
 
 # =========================
-# תצוגת התוצאות (לחיזוי רגיל והיסטורי)
+# תצוגת התוצאות
 # =========================
 if st.session_state.get('run_done') and st.session_state.get('run_mode') != "חיזוי רב-שכבתי (Multi-Timeframe)":
     
@@ -390,7 +418,6 @@ if st.session_state.get('run_done') and st.session_state.get('run_mode') != "ח�
         st.divider()
     elif st.session_state['run_mode'] == "בדיקה היסטורית (Backtest)":
         st.markdown("### 📈 בדיקה היסטורית בודדת")
-        # בבדיקה בודדת, הנתון נמצא במפתח של ה-cutoff
         first_key = list(st.session_state['backtest_data'].keys())[0]
         single_test_data = st.session_state['backtest_data'][first_key]
         fig_single = create_forecast_figure(single_test_data)
@@ -434,7 +461,7 @@ if st.session_state.get('run_done') and st.session_state.get('run_mode') != "ח�
             selected_c = df_res.iloc[selected_row_idx]['_c_val']
             show_chart_dialog(selected_c)
 
-        if total_tests > 1: # רק אם זה הבדיקה המקיפה (מעל שורה אחת)
+        if total_tests > 1:
             if win_rate >= 60:
                 st.success(f"🏆 **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (נחשב למודל יציב ואמין עבור הנכס הזה)")
             elif win_rate <= 40:
