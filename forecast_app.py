@@ -194,13 +194,28 @@ def fetch_data(symbol, interval_str):
 def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=128):
     if "תשואות" not in method:
         forecast_res, quant_res = model.forecast([ctx_prices], freq=[0])
-        return forecast_res[0][:horizon], quant_res[0, :horizon, 0], quant_res[0, :horizon, -1]
+        
+        # שולפים כמה אחוזונים המודל החזיר, ומוצאים את האינדקס האמצעי (חציון)
+        num_quantiles = quant_res.shape[2]
+        median_idx = num_quantiles // 2
+        
+        # החלפנו את התחזית הרגילה (forecast_res) בחציון המדויק מתוך הטווחים!
+        fcst_prices = quant_res[0, :horizon, median_idx] 
+        fcst_lower = quant_res[0, :horizon, 0]
+        fcst_upper = quant_res[0, :horizon, -1]
+        
+        return fcst_prices, fcst_lower, fcst_upper
     else:
         returns = np.diff(ctx_prices) / ctx_prices[:-1]
         returns = np.nan_to_num(returns)
         
         forecast_res, quant_res = model.forecast([returns], freq=[0])
-        fcst_ret = forecast_res[0][:horizon]
+        
+        num_quantiles = quant_res.shape[2]
+        median_idx = num_quantiles // 2
+        
+        # שולפים את החציון גם בשיטת התשואות
+        fcst_ret = quant_res[0, :horizon, median_idx]
         lower_ret = quant_res[0, :horizon, 0]
         upper_ret = quant_res[0, :horizon, -1]
         
