@@ -221,7 +221,7 @@ if st.button("🔮 הפעל מודל חיזוי AI עכשיו", type="primary", 
             x=actual_dates, y=actual_prices, mode='lines', name='מה קרה בפועל? (המציאות)', line=dict(color='#10b981', width=3)
         ))
         
-        fig.add_vline(x=last_train_date, line_width=2, line_dash="dot", line_color="#94a3b8", annotation_text="נקודת החיתוך (כאן המודל עוור)", annotation_position="top left")
+        fig.add_vline(x=last_train_date.isoformat(), line_width=2, line_dash="dot", line_color="#94a3b8", annotation_text="נקודת החיתוך (כאן המודל עוור)", annotation_position="top left")
     
     title_text = f"חיזוי מסלול מחיר: {asset_name}"
     if cutoff_bars > 0:
