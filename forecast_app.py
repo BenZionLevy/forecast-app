@@ -137,9 +137,9 @@ if mode == "חיזוי רגיל (עתיד + מבחני עבר)":
         resolution_label = st.selectbox("רזולוציית זמן:", list(int_map.keys()), index=4)
         interval_choice = int_map[resolution_label]
     with c_meth:
-        calc_method = st.radio("שיטת חישוב:", ["שערים גולמיים", "תשואות באחוזים (מומלץ)"])
+        calc_method = st.radio("שיטת חישוב מודל:", ["שערים גולמיים", "מחיר משוקלל נפח (VWAP 20)", "תשואות באחוזים (מומלץ)"])
 else:
-    st.info("🧬 **מצב מחקר מתקדם:** המערכת תריץ במקביל גם שיטת שערים (קו רציף) וגם שיטת תשואות (קו מקווקו) על 3 רזולוציות זמן שונות באותו גרף.")
+    st.info("🧬 **מצב מחקר מתקדם:** המערכת תריץ במקביל: שערים (קו רציף), תשואות (קו מקווקו), ומחיר משוקלל נפח VWAP (נקודה-קו) על כל רזולוציית זמן.")
 
 # =========================
 # פונקציות ליבה (תאריכים, משיכה, וחיזוי)
@@ -180,19 +180,27 @@ def fetch_data(symbol, interval_str):
     if df.index.tz is None: df.index = df.index.tz_localize("UTC").tz_convert("Asia/Jerusalem")
     else: df.index = df.index.tz_convert("Asia/Jerusalem")
     df.index = df.index.tz_localize(None) 
-    return df[['close']]
+    
+    # חישוב מתנד מבוסס נפח VWAP לתקופה של 20 נרות
+    window = 20
+    if 'volume' in df.columns and not df['volume'].empty:
+        df['vwap'] = (df['close'] * df['volume']).rolling(window=window).sum() / df['volume'].rolling(window=window).sum()
+        df['vwap'] = df['vwap'].fillna(df['close']) # למנוע שגיאות ב-20 הנרות הראשונים
+    else:
+        df['vwap'] = df['close'] # פולבק במקרה של חוסר בנתוני נפח
+        
+    return df[['close', 'vwap', 'volume']]
 
 def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=128):
     """
     מבצע חיזוי ומתמודד אוטומטית עם המרת תשואות למחירים במידת הצורך.
     """
-    if "שערים" in method:
+    if "תשואות" not in method: # עובד עבור שערים ועבור VWAP
         forecast_res, quant_res = model.forecast([ctx_prices], freq=[0])
         return forecast_res[0][:horizon], quant_res[0, :horizon, 0], quant_res[0, :horizon, -1]
     else:
         # שיטת תשואות: חישוב אחוזי שינוי
         returns = np.diff(ctx_prices) / ctx_prices[:-1]
-        # במקרים נדירים של חלוקה באפס או שגיאה, מחליפים ב-0
         returns = np.nan_to_num(returns)
         
         forecast_res, quant_res = model.forecast([returns], freq=[0])
@@ -255,7 +263,16 @@ def generate_excel(data_dict, stock_name):
         for sheet_name, df in data_dict.items():
             export_df = df.copy()
             export_df.reset_index(inplace=True)
-            export_df.columns = ["תאריך ושעה", "שער סגירה"]
+            cols = list(export_df.columns)
+            
+            # וידוא שקיימות כל העמודות החדשות לפני שינוי שמות
+            if 'vwap' in cols and 'volume' in cols:
+                export_df = export_df[[cols[0], 'close', 'vwap', 'volume']]
+                export_df.columns = ["תאריך ושעה", "שער סגירה", "מחיר משוקלל נפח (VWAP)", "נפח מסחר"]
+            else:
+                export_df = export_df[[cols[0], 'close']]
+                export_df.columns = ["תאריך ושעה", "שער סגירה"]
+                
             export_df.to_excel(writer, index=False, sheet_name=sheet_name)
     return output.getvalue()
 
@@ -272,7 +289,7 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         
     if mode == "חיזוי רב-שכבתי כפול (Multi-Timeframe)":
         tfs = {"1d": ("יומי", "#f59e0b"), "60m": ("שעתי", "#8b5cf6"), "15m": ("15 דקות", "#ef4444")}
-        methods = ["שערים", "תשואות"]
+        methods = ["שערים", "VWAP", "תשואות"]
         
         fig_mtf = go.Figure()
         
@@ -289,14 +306,11 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         for tf, (name, color) in tfs.items():
             df = fetch_data(ASSETS[stock], tf)
             if df.empty or len(df) < 512: 
-                current_step += 2
+                current_step += 3
                 continue
             
             st.session_state['raw_data_export'][f"נתוני_{name}"] = df
-            prices_full = df['close'].values
-            ctx_prices = prices_full[-1024:] if len(prices_full) > 1024 else prices_full
             last_date = df.index[-1]
-            last_price = ctx_prices[-1]
             
             if tf == "1d": draw_periods = 25
             elif tf == "60m": draw_periods = 80
@@ -307,12 +321,25 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             
             for meth in methods:
                 status_text.text(f"מנתח שכבת זמן: {name} | שיטה: {meth}...")
+                
+                # בחירת הנתונים בהתאם לשיטה (VWAP או סגירה רגילה)
+                prices_full = df['vwap'].values if meth == "VWAP" else df['close'].values
+                ctx_prices = prices_full[-1024:] if len(prices_full) > 1024 else prices_full
+                last_price = ctx_prices[-1]
+                
                 try:
                     fcst_prices, _, _ = get_forecast(model, ctx_prices, method=meth, horizon=draw_periods)
                     conn_fcst = [last_price] + list(fcst_prices)
                     
-                    dash_style = "solid" if meth == "שערים" else "dot"
-                    opac = 1.0 if meth == "שערים" else 0.7
+                    if meth == "שערים":
+                        dash_style = "solid"
+                        opac = 1.0
+                    elif meth == "VWAP":
+                        dash_style = "dashdot"
+                        opac = 0.9
+                    else:
+                        dash_style = "dot"
+                        opac = 0.7
                     
                     fig_mtf.add_trace(go.Scatter(
                         x=conn_dates, y=conn_fcst, mode="lines", 
@@ -330,13 +357,13 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         
         fig_mtf.update_layout(
             template="plotly_white", hovermode="x unified", title_x=0.5,
-            title=f"תצוגה רב-שכבתית כפולה: מבוסס שערים ומבוסס תשואות ({stock})",
+            title=f"תצוגה רב-שכבתית: שערים, משוקלל נפח (VWAP), ותשואות ({stock})",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), 
             margin=dict(l=10, r=10, t=40, b=80) 
         )
         fig_mtf.update_xaxes(nticks=25, tickangle=-45, automargin=True)
         
-        st.markdown("### 🧬 תרשים רב-שכבתי כפול (Multi-Timeframe)")
+        st.markdown("### 🧬 תרשים רב-שכבתי (Multi-Timeframe)")
         st.plotly_chart(fig_mtf, use_container_width=True)
         st.session_state['run_done'] = True
         st.session_state['run_mode'] = mode
@@ -363,7 +390,8 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         st.session_state['backtest_data'] = {}
         results_list = []
 
-        prices_full = df['close'].values
+        # משיכת סדרת הנתונים המדויקת לפי בחירת המשתמש בממשק
+        prices_full = df['vwap'].values if "VWAP" in calc_method else df['close'].values
         dates_full = df.index
 
         progress_bar = st.progress(0)
@@ -388,7 +416,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                 last_price = ctx_prices[-1]
 
                 try:
-                    # שימוש בפונקציה החכמה החדשה לחיזוי
                     fcst_prices, fcst_lower, fcst_upper = get_forecast(model, ctx_prices, method=calc_method, horizon=128)
                     fcst_dates = generate_israel_trading_dates(last_date, 128, interval_choice)
 
@@ -428,7 +455,7 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         status_text.empty()
         progress_bar.empty()
 
-        if results_list or mode == "חיזוי עתידי רגיל":
+        if results_list or mode == "חיזוי רגיל (עתיד + מבחני עבר)":
             st.session_state['results_df'] = pd.DataFrame(results_list)
             st.session_state['run_done'] = True
             st.session_state['run_mode'] = mode
