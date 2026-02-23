@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from tvDatafeed import TvDatafeed, Interval
 import timesfm
 import io
+import math
 
 st.set_page_config(
     page_title="חיזוי מניות AI",
@@ -60,7 +61,7 @@ div[data-testid="stMarkdownContainer"], div[data-testid="stAlert"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("<div class='main-title'>📈 חיזוי מניות ומדדים (Google TimesFM)</div>", unsafe_allow_html=True)
+st.markdown("<div class='main-title'>📈 חיזוי מניות ומדדים (Google TimesFM 2.5)</div>", unsafe_allow_html=True)
 
 st.markdown("""
 <div class="warning-box">
@@ -84,7 +85,7 @@ def load_model():
             normalize_inputs=True,
             use_continuous_quantile_head=True,
             force_flip_invariance=True,
-            infer_is_positive=False, # <<< התיקון המצוין: מאפשר סוף סוף תשואות שליליות
+            infer_is_positive=False, # התיקון המצוין: מאפשר סוף סוף תשואות שליליות
             fix_quantile_crossing=True,
         )
     )
@@ -128,7 +129,7 @@ with col1:
 with col2:
     mode = st.radio(
         "סוג ניתוח",
-        ["חיזוי רגיל (עתיד + מבחני עבר)", "חיזוי רב-שכבתי כפול (Multi-Timeframe)"],
+        ["חיזוי רגיל (עתיד + מבחני עבר)", "חיזוי רב-שכבתי כפול (Multi-Timeframe)", "בדיקת אסטרטגיה (Matrix)"],
         horizontal=False
     )
 
@@ -143,8 +144,10 @@ if mode == "חיזוי רגיל (עתיד + מבחני עבר)":
         interval_choice = int_map[resolution_label]
     with c_meth:
         calc_method = st.radio("שיטת חישוב מודל:", ["שערים גולמיים", "מחיר משוקלל נפח (VWAP 20)", "תשואות באחוזים (מומלץ)"])
-else:
+elif mode == "חיזוי רב-שכבתי כפול (Multi-Timeframe)":
     st.info("🧬 **מצב מחקר מתקדם:** המערכת תריץ במקביל: שערים (קו רציף), תשואות (קו מקווקו), ומחיר משוקלל נפח VWAP (נקודה-קו) על כל רזולוציית זמן.")
+else:
+    st.info("🧮 **בדיקת אסטרטגיה (מטריצה):** המערכת תבצע אלפי בדיקות Backtest על טווחי זמן שונים (עד 30 בדיקות לכל משבצת) ותציג את ממוצע הפער בין התחזית למציאות באחוזים.")
 
 # =========================
 # פונקציות ליבה (תאריכים, משיכה, וחיזוי)
@@ -175,18 +178,17 @@ def generate_israel_trading_dates(start_date, periods, tf):
     return dates
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_data(symbol, interval_str):
+def fetch_data(symbol, interval_str, n_bars=4000):
     tv = TvDatafeed()
     tv_intervals = {"5m": Interval.in_5_minute, "15m": Interval.in_15_minute, "30m": Interval.in_30_minute, "60m": Interval.in_1_hour, "1d": Interval.in_daily, "1W": Interval.in_weekly}
     inter = tv_intervals.get(interval_str, Interval.in_daily)
-    df = tv.get_hist(symbol=symbol[0], exchange=symbol[1], interval=inter, n_bars=4000)
+    df = tv.get_hist(symbol=symbol[0], exchange=symbol[1], interval=inter, n_bars=n_bars)
     
     if df is None or df.empty: return pd.DataFrame()
     if df.index.tz is None: df.index = df.index.tz_localize("UTC").tz_convert("Asia/Jerusalem")
     else: df.index = df.index.tz_convert("Asia/Jerusalem")
     df.index = df.index.tz_localize(None) 
     
-    # חישוב מתנד מבוסס נפח VWAP לתקופה של 20 נרות
     window = 20
     if 'volume' in df.columns and not df['volume'].empty:
         df['vwap'] = (df['close'] * df['volume']).rolling(window=window).sum() / df['volume'].rolling(window=window).sum()
@@ -196,21 +198,15 @@ def fetch_data(symbol, interval_str):
         
     return df[['close', 'vwap', 'volume']]
 
-# =========================
-# פונקציית החיזוי - הותאמה ל-API החדש של 2.5
-# =========================
 def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=128):
     if "תשואות" not in method:
         point_fcst, quant_fcst = model.forecast(
             horizon=horizon, 
             inputs=[ctx_prices]
         )
-        
-        # אינדקס 5 הוא החציון הממורכז, 1 זה אחוזון 10, ו- (1-) זה אחוזון 90
         fcst_prices = quant_fcst[0, :, 5]
         fcst_lower = quant_fcst[0, :, 1]
         fcst_upper = quant_fcst[0, :, -1]
-        
         return fcst_prices, fcst_lower, fcst_upper
     else:
         returns = np.diff(ctx_prices) / ctx_prices[:-1]
@@ -221,15 +217,12 @@ def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=
             inputs=[returns]
         )
         
-        # משיכת חציון תשואות ואחוזונים קיצוניים
         fcst_ret = quant_fcst[0, :, 5]
         lower_ret = quant_fcst[0, :, 1]
         upper_ret = quant_fcst[0, :, -1]
         
         last_price = ctx_prices[-1]
         fcst_prices = last_price * np.cumprod(1 + fcst_ret)
-        
-        # הערה: ההכפלה המצטברת (cumprod) כאן תייצר מניפת פיזור רחבה מאוד.
         fcst_lower = last_price * np.cumprod(1 + lower_ret)
         fcst_upper = last_price * np.cumprod(1 + upper_ret)
         
@@ -243,19 +236,12 @@ def create_forecast_figure(data_dict):
     c_val = data_dict['c_val']
     
     hist_len = min(200, len(ctx_prices))
-    
-    # === יצירת ציר X מספרי רציף כדי לאפשר מילוי צבע ===
-    # היסטוריה: [-199, -198 ... 0]
     x_hist_int = list(range(-hist_len + 1, 1))
-    # עתיד: [1, 2, 3 ...]
     x_fcst_int = list(range(1, len(fcst_dates) + 1))
-    # קו מקשר (מ-0 והלאה)
     x_conn_int = [0] + x_fcst_int
     
-    # === הכנת נתוני CustomData לחלונית צפה (Hover) עשירה ===
-    # מבנה: [T_Label, Real_Date]
     custom_hist = [[f"T{x}", d.strftime("%Y-%m-%d %H:%M")] for x, d in zip(x_hist_int, ctx_dates[-hist_len:])]
-    custom_hist[-1][0] = "T=0" # הווה
+    custom_hist[-1][0] = "T=0" 
     
     custom_fcst = [[f"T+{x}", d.strftime("%Y-%m-%d %H:%M")] for x, d in zip(x_fcst_int, fcst_dates)]
     custom_conn = [custom_hist[-1]] + custom_fcst
@@ -266,8 +252,6 @@ def create_forecast_figure(data_dict):
     conn_upper = [last_price] + list(fcst_upper)
     
     fig = go.Figure()
-    
-    # 1. היסטוריה
     fig.add_trace(go.Scatter(
         x=x_hist_int, y=ctx_prices[-hist_len:], 
         mode="lines", name="היסטוריה (בסיס)", 
@@ -276,7 +260,6 @@ def create_forecast_figure(data_dict):
         hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>מחיר: %{y:.2f}<extra></extra>"
     ))
     
-    # 2. גבול עליון (שקוף, משמש לנתוני החלונית)
     fig.add_trace(go.Scatter(
         x=x_conn_int, y=conn_upper, 
         mode="lines", line=dict(width=0), 
@@ -285,7 +268,6 @@ def create_forecast_figure(data_dict):
         hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>גבול עליון: %{y:.2f}<extra></extra>"
     ))
     
-    # 3. גבול תחתון (מילוי שטח למעלה)
     fig.add_trace(go.Scatter(
         x=x_conn_int, y=conn_lower, 
         mode="lines", fill="tonexty", fillcolor="rgba(245, 158, 11, 0.2)", 
@@ -294,7 +276,6 @@ def create_forecast_figure(data_dict):
         hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>גבול תחתון: %{y:.2f}<extra></extra>"
     ))
     
-    # 4. תחזית AI מרכזית
     fig.add_trace(go.Scatter(
         x=x_conn_int, y=conn_fcst, 
         mode="lines", name="תחזית AI", 
@@ -303,7 +284,6 @@ def create_forecast_figure(data_dict):
         hovertemplate="<b>%{customdata[0]}</b> | %{customdata[1]}<br>תחזית AI: %{y:.2f}<extra></extra>"
     ))
 
-    # 5. מציאות בפועל (בבדיקות עבר)
     if c_val > 0:
         x_act_int = list(range(0, len(actual_dates) + 1))
         custom_act = [custom_hist[-1]] + [[f"T+{x}", d.strftime("%Y-%m-%d %H:%M")] for x, d in zip(range(1, len(actual_dates)+1), actual_dates)]
@@ -324,7 +304,6 @@ def create_forecast_figure(data_dict):
 
     fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=10, r=10, t=40, b=80))
     
-    # === יצירת ציר X מרובה וצפוף (קפיצות של 10 נרות) ===
     min_x = min(x_hist_int)
     max_x = max(x_fcst_int)
     tick_vals = list(range((min_x // 10) * 10, max_x + 1, 10))
@@ -371,7 +350,142 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
     st.session_state['selected_stock'] = stock
     st.session_state['raw_data_export'] = {}
         
-    if mode == "חיזוי רב-שכבתי כפול (Multi-Timeframe)":
+    # ===============
+    # מצב בדיקת אסטרטגיה (Matrix)
+    # ===============
+    if mode == "בדיקת אסטרטגיה (Matrix)":
+        
+        ROWS_DEF = [
+            ("לפי 5 דקות", 5/60, "5m"),
+            ("לפי 15 דקות", 15/60, "15m"),
+            ("לפי שעה", 1, "1h"),
+            ("לפי שעתיים", 2, "1h"),
+            ("לפי 3 שעות", 3, "1h"),
+            ("לפי 4 שעות", 4, "1h"),
+            ("לפי 5 שעות", 5, "1h"),
+            ("לפי 6 שעות", 6, "1h"),
+            ("לפי 7 שעות", 7, "1h"),
+            ("לפי 8 שעות", 8, "1h"),
+            ("לפי 9 שעות", 9, "1h"),
+            ("לפי 10 שעות מסחר", 10, "1h"),
+            ("לפי 11 שעות מסחר", 11, "1h"),
+            ("לפי 12 שעות מסחר", 12, "1h"),
+            ("לפי 13 שעות מסחר", 13, "1h")
+        ]
+        
+        COLS_DEF = [
+            ("שעה קדימה", 1), ("שעתיים קדימה", 2), ("5 שעות", 5),
+            ("יום", 7.5), ("יומיים", 15), ("3 ימים", 22.5),
+            ("4 ימים", 30), ("5 ימים", 37.5), ("6 ימים", 45), ("7 ימים", 52.5)
+        ]
+
+        matrix_df = pd.DataFrame(index=[r[0] for r in ROWS_DEF], columns=[c[0] for c in COLS_DEF])
+        
+        # משיכת נתונים בסיסיים
+        df_5m = fetch_data(ASSETS[stock], "5m", 5000)
+        df_15m = fetch_data(ASSETS[stock], "15m", 5000)
+        df_1h = fetch_data(ASSETS[stock], "60m", 5000)
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        total_cells = len(ROWS_DEF) * len(COLS_DEF)
+        current_cell = 0
+        
+        for row_idx, (row_name, row_hours, base_tf) in enumerate(ROWS_DEF):
+            # יצירת מחירי סגירה לרזולוציה הנוכחית על ידי קיבוץ (Grouping)
+            if base_tf == "5m" and not df_5m.empty:
+                prices = df_5m['close'].values
+            elif base_tf == "15m" and not df_15m.empty:
+                prices = df_15m['close'].values
+            elif base_tf == "1h" and not df_1h.empty:
+                if row_hours > 1:
+                    chunk_size = int(row_hours)
+                    # קיבוץ כל X נרות של שעה לנר אחד, לפי ההוראה שלך
+                    prices = df_1h.groupby(np.arange(len(df_1h)) // chunk_size)['close'].last().values
+                else:
+                    prices = df_1h['close'].values
+            else:
+                prices = np.array([])
+                
+            for col_idx, (col_name, col_hours) in enumerate(COLS_DEF):
+                status_text.text(f"מחשב אסטרטגיה: {row_name} -> {col_name}...")
+                current_cell += 1
+                
+                # חישוב כמות הנרות הנדרשת קדימה
+                H_candles = int(round(col_hours / row_hours))
+                
+                if len(prices) < 100 or H_candles < 1:
+                    matrix_df.loc[row_name, col_name] = "---"
+                    progress_bar.progress(current_cell / total_cells)
+                    continue
+                
+                # יצירת הבדיקות (עד 30 בדיקות, בקפיצות של 20 נרות לאחור)
+                contexts = []
+                actual_rets = []
+                tests_run = 0
+                
+                for i in range(30):
+                    end_idx = len(prices) - 1 - H_candles - (i * 20)
+                    start_idx = end_idx - 512 # מקסימום קונטקסט שייקלח
+                    
+                    if start_idx < 0:
+                        start_idx = max(0, end_idx - 128) # מינימום קונטקסט סביר
+                        if end_idx - start_idx < 32:
+                            break # אין מספיק היסטוריה
+                            
+                    ctx_prices = prices[start_idx:end_idx]
+                    fut_prices = prices[end_idx:end_idx+H_candles]
+                    
+                    if len(ctx_prices) > 0 and len(fut_prices) == H_candles:
+                        # המרה לתשואות כדי להזין למודל
+                        ctx_ret = np.diff(ctx_prices) / ctx_prices[:-1]
+                        contexts.append(np.nan_to_num(ctx_ret))
+                        
+                        # תשואה אמיתית בפועל בקצה חלון החיזוי
+                        act = (fut_prices[-1] - prices[end_idx-1]) / prices[end_idx-1]
+                        actual_rets.append(act)
+                        tests_run += 1
+                
+                if tests_run == 0:
+                    matrix_df.loc[row_name, col_name] = "---"
+                else:
+                    try:
+                        # Batching Forecast - חיזוי כל הבדיקות יחד לחיסכון עצום בזמן
+                        _, quant_fcst = model.forecast(horizon=H_candles, inputs=contexts)
+                        
+                        avg_diff = 0
+                        for b in range(tests_run):
+                            fcst_ret = quant_fcst[b, :, 5] # חציון
+                            # תשואה מצטברת של החיזוי
+                            pred = np.prod(1 + fcst_ret) - 1
+                            
+                            # חישוב הפער: מציאות פחות תחזית
+                            diff = actual_rets[b] - pred
+                            avg_diff += diff
+                            
+                        avg_diff = (avg_diff / tests_run) * 100 # ממוצע באחוזים
+                        
+                        if tests_run < 30:
+                            matrix_df.loc[row_name, col_name] = f"{avg_diff:+.2f}% ({tests_run} בדיקות)"
+                        else:
+                            matrix_df.loc[row_name, col_name] = f"{avg_diff:+.2f}%"
+                    except Exception as e:
+                        matrix_df.loc[row_name, col_name] = "שגיאה"
+                        
+                progress_bar.progress(current_cell / total_cells)
+
+        status_text.empty()
+        progress_bar.empty()
+        
+        st.session_state['matrix_df'] = matrix_df
+        st.session_state['run_done'] = True
+        st.session_state['run_mode'] = mode
+
+    # ===============
+    # מצב חיזוי רב-שכבתי
+    # ===============
+    elif mode == "חיזוי רב-שכבתי כפול (Multi-Timeframe)":
         tfs = {"1d": ("יומי", "#f59e0b"), "60m": ("שעתי", "#8b5cf6"), "15m": ("15 דקות", "#ef4444")}
         methods = ["שערים", "VWAP", "תשואות"]
         
@@ -423,7 +537,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
                     fcst_prices, _, _ = get_forecast(model, ctx_prices, method=meth, horizon=draw_periods)
                     conn_fcst = [last_price] + list(fcst_prices)
                     
-                    # הוספת תוויות T+X מותאמות בחלונית המידע גם בגרף הרב-שכבתי
                     conn_dates_str = [d.strftime("%Y-%m-%d %H:%M") for d in conn_dates]
                     mtf_labels = [["T=0", conn_dates_str[0]]] + [[f"T+{i+1} ({name})", conn_dates_str[i+1]] for i in range(len(fcst_prices))]
                     
@@ -453,7 +566,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), 
             margin=dict(l=10, r=10, t=40, b=80) 
         )
-        # הפיכת ציר ה-X לצפוף יותר בגרף הרב שכבתי
         fig_mtf.update_xaxes(nticks=40, tickangle=-45, automargin=True)
         
         st.markdown("### 🧬 תרשים רב-שכבתי (Multi-Timeframe)")
@@ -461,6 +573,9 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
         st.session_state['run_done'] = True
         st.session_state['run_mode'] = mode
 
+    # ===============
+    # מצב חיזוי רגיל
+    # ===============
     else:
         df = fetch_data(ASSETS[stock], interval_choice)
         
@@ -472,7 +587,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
 
         if interval_choice == "1d":
             unit = "ימי מסחר"
-            # קפיצות הגיוניות של שבועות וחודשים (עד חצי שנה שזה 126 ימי מסחר)
             test_cutoffs = [0, 5, 10, 15, 21, 42, 63, 84, 105, 126]
             labels_dict = {
                 5: "שבוע (5 ימים) אחורה", 
@@ -485,7 +599,6 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             test_labels = [labels_dict.get(c, f"{c} {unit} אחורה") if c > 0 else "חיזוי עתידי אמיתי (היום והלאה)" for c in test_cutoffs]
         else:
             unit = "נרות"
-            # תוך-יומי: קפיצות של 10 לפי ההצעה שלך (עד 120, הגבול העליון של חלון החיזוי)
             test_cutoffs = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120]
             test_labels = ["חיזוי עתידי אמיתי (היום והלאה)"] + [f"{c} {unit} אחורה ({c} כפול {resolution_label})" for c in test_cutoffs[1:]]
 
@@ -563,85 +676,104 @@ if st.button("🚀 הפעל ניתוח AI מקיף", type="primary", use_contain
             st.session_state['run_mode'] = mode
 
 # =========================
-# תצוגת התוצאות (לחיזוי רגיל בלבד)
-# =========================
-if st.session_state.get('run_done') and st.session_state.get('run_mode') == "חיזוי רגיל (עתיד + מבחני עבר)":
-    
-    st.markdown("### 📈 תחזית עתידית (מהיום והלאה)")
-    future_data = st.session_state['backtest_data'][0]
-    fig_future = create_forecast_figure(future_data)
-    st.plotly_chart(fig_future, use_container_width=True)
-    
-    st.divider()
-    
-    df_res = st.session_state.get('results_df', pd.DataFrame())
-
-    if not df_res.empty:
-        correct_count = sum(1 for x in df_res['_is_correct'] if x == True)
-        total_tests = sum(1 for x in df_res['_is_correct'] if x is not None)
-        win_rate = (correct_count / total_tests) * 100 if total_tests > 0 else 0
-
-        st.markdown("### 🔬 מבחני אמינות אוטומטיים למודל")
-        st.info("💡 המערכת חזרה אחורה בזמן ובדקה אם התחזיות שלה אכן התממשו במציאות. **לחץ על לחצן 'הצג' בכל שורה כדי לראות את הגרף!**")
-
-        col_h1, col_h2, col_h3, col_h4 = st.columns([2, 2, 2, 1])
-        col_h1.markdown("<div class='table-header'>נקודת התחלה (בדיקת עבר)</div>", unsafe_allow_html=True)
-        col_h2.markdown("<div class='table-header'>סטייה מהמציאות (MAPE)</div>", unsafe_allow_html=True)
-        col_h3.markdown("<div class='table-header'>זיהוי כיוון מגמה</div>", unsafe_allow_html=True)
-        col_h4.markdown("<div class='table-header'>פעולה</div>", unsafe_allow_html=True)
-        
-        for index, row in df_res.iterrows():
-            c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
-            c1.write(row['label'])
-            c2.write(row['mape'])
-            
-            trend = row['trend']
-            if "✅" in trend: c3.markdown(f"<span style='color: #047857; font-weight: bold;'>{trend}</span>", unsafe_allow_html=True)
-            else: c3.markdown(f"<span style='color: #b91c1c; font-weight: bold;'>{trend}</span>", unsafe_allow_html=True)
-            
-            if c4.button("📊 הצג", key=f"btn_show_{row['_c_val']}"):
-                show_chart_dialog(row['_c_val'])
-                
-            st.markdown("<hr style='margin: 0.2rem 0; opacity: 0.2;'>", unsafe_allow_html=True)
-
-        if total_tests > 1:
-            if win_rate >= 60:
-                st.success(f"🏆 **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (נחשב למודל יציב ואמין עבור הנכס הזה)")
-            elif win_rate <= 40:
-                st.error(f"⚠️ **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (המודל מתקשה לקרוא את הנכס הזה, לא מומלץ להסתמך עליו כאן)")
-            else:
-                st.warning(f"⚖️ **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (תוצאה בינונית - כדאי לשלב כלים נוספים בהחלטה)")
-
-        with st.expander("❓ איך מחושבת 'הסטייה מהמציאות' (MAPE)?"):
-            st.markdown("""
-            **MAPE (Mean Absolute Percentage Error)** הוא מדד סטטיסטי שמראה בכמה אחוזים המודל "פספס" בממוצע.
-            
-            **דוגמה פשוטה:**
-            אם המניה סגרה בפועל במחיר של **100 שקלים**, אבל המודל חזה שהיא תגיע ל-**105 שקלים**, הסטייה היא של **5%**.
-            המדד לוקח את כל הסטיות היומיות לאורך התקופה שנבדקה, ומציג את הממוצע שלהן.
-            """)
-
-# =========================
-# כפתור הורדת אקסל (מופיע בסוף כל הרצה)
+# תצוגת התוצאות
 # =========================
 if st.session_state.get('run_done'):
-    st.divider()
-    st.markdown("### 📥 בדיקת נתונים גולמיים")
-    st.info("כדי להבטיח שקיפות מלאה, באפשרותך להוריד את קובץ הנתונים הגולמי שעליו התבסס המודל לאימות מול מקורות חיצוניים. הקובץ כולל גיליון עם קישור ישיר למניה באתר Yahoo Finance.")
     
-    excel_file = generate_excel(st.session_state['raw_data_export'], st.session_state['selected_stock'])
-    st.download_button(
-        label="💾 הורד קובץ נתונים (Excel)",
-        data=excel_file,
-        file_name=f"{st.session_state['selected_stock']}_RawData.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
+    if st.session_state.get('run_mode') == "בדיקת אסטרטגיה (Matrix)":
+        st.markdown("### 🧮 תוצאות בדיקת אסטרטגיה (Matrix Backtesting)")
+        st.markdown("""
+        **הסבר על הנתונים בטבלה:**<br>
+        המספר בכל תא מייצג את ממוצע הפער בין התחזית למציאות (`מציאות - תחזית = פער`).<br>
+        למשל, תוצאה של `-0.25%` אומרת שבממוצע התחזית הייתה אופטימית מדי ב-0.25%. תוצאה שקרובה לאפס מצביעה על מודל מדויק במיוחד.<br>
+        *הערה: המערכת משתמשת בקיבוץ נרות (Grouping) מדויק כדי ליצור נרות של 5-13 שעות על בסיס היסטוריית מחירים שעתית.*
+        """, unsafe_allow_html=True)
+        
+        # צביעת רקע עדינה ל-Dataframe (ירוק לפער חיובי, אדום לשלילי)
+        def color_negative_red(val):
+            if isinstance(val, str) and "%" in val:
+                try:
+                    num = float(val.split("%")[0])
+                    color = 'rgba(239, 68, 68, 0.15)' if num < 0 else 'rgba(34, 197, 94, 0.15)'
+                    return f'background-color: {color}'
+                except: pass
+            return ''
+
+        styled_df = st.session_state['matrix_df'].style.applymap(color_negative_red)
+        st.dataframe(styled_df, use_container_width=True, height=600)
+
+    elif st.session_state.get('run_mode') == "חיזוי רגיל (עתיד + מבחני עבר)":
+        st.markdown("### 📈 תחזית עתידית (מהיום והלאה)")
+        future_data = st.session_state['backtest_data'][0]
+        fig_future = create_forecast_figure(future_data)
+        st.plotly_chart(fig_future, use_container_width=True)
+        
+        st.divider()
+        
+        df_res = st.session_state.get('results_df', pd.DataFrame())
+
+        if not df_res.empty:
+            correct_count = sum(1 for x in df_res['_is_correct'] if x == True)
+            total_tests = sum(1 for x in df_res['_is_correct'] if x is not None)
+            win_rate = (correct_count / total_tests) * 100 if total_tests > 0 else 0
+
+            st.markdown("### 🔬 מבחני אמינות אוטומטיים למודל")
+            st.info("💡 המערכת חזרה אחורה בזמן ובדקה אם התחזיות שלה אכן התממשו במציאות. **לחץ על לחצן 'הצג' בכל שורה כדי לראות את הגרף!**")
+
+            col_h1, col_h2, col_h3, col_h4 = st.columns([2, 2, 2, 1])
+            col_h1.markdown("<div class='table-header'>נקודת התחלה (בדיקת עבר)</div>", unsafe_allow_html=True)
+            col_h2.markdown("<div class='table-header'>סטייה מהמציאות (MAPE)</div>", unsafe_allow_html=True)
+            col_h3.markdown("<div class='table-header'>זיהוי כיוון מגמה</div>", unsafe_allow_html=True)
+            col_h4.markdown("<div class='table-header'>פעולה</div>", unsafe_allow_html=True)
+            
+            for index, row in df_res.iterrows():
+                c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+                c1.write(row['label'])
+                c2.write(row['mape'])
+                
+                trend = row['trend']
+                if "✅" in trend: c3.markdown(f"<span style='color: #047857; font-weight: bold;'>{trend}</span>", unsafe_allow_html=True)
+                else: c3.markdown(f"<span style='color: #b91c1c; font-weight: bold;'>{trend}</span>", unsafe_allow_html=True)
+                
+                if c4.button("📊 הצג", key=f"btn_show_{row['_c_val']}"):
+                    show_chart_dialog(row['_c_val'])
+                    
+                st.markdown("<hr style='margin: 0.2rem 0; opacity: 0.2;'>", unsafe_allow_html=True)
+
+            if total_tests > 1:
+                if win_rate >= 60:
+                    st.success(f"🏆 **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (נחשב למודל יציב ואמין עבור הנכס הזה)")
+                elif win_rate <= 40:
+                    st.error(f"⚠️ **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (המודל מתקשה לקרוא את הנכס הזה, לא מומלץ להסתמך עליו כאן)")
+                else:
+                    st.warning(f"⚖️ **ציון אמינות כללי:** {win_rate:.0f}% הצלחה בזיהוי המגמה. (תוצאה בינונית - כדאי לשלב כלים נוספים בהחלטה)")
+
+            with st.expander("❓ איך מחושבת 'הסטייה מהמציאות' (MAPE)?"):
+                st.markdown("""
+                **MAPE (Mean Absolute Percentage Error)** הוא מדד סטטיסטי שמראה בכמה אחוזים המודל "פספס" בממוצע.
+                
+                **דוגמה פשוטה:**
+                אם המניה סגרה בפועל במחיר של **100 שקלים**, אבל המודל חזה שהיא תגיע ל-**105 שקלים**, הסטייה היא של **5%**.
+                המדד לוקח את כל הסטיות היומיות לאורך התקופה שנבדקה, ומציג את הממוצע שלהן.
+                """)
+
+    # כפתור הורדת אקסל (רלוונטי לכל המצבים)
+    if 'raw_data_export' in st.session_state and st.session_state['raw_data_export']:
+        st.divider()
+        st.markdown("### 📥 הורדת נתונים")
+        excel_file = generate_excel(st.session_state['raw_data_export'], st.session_state['selected_stock'])
+        st.download_button(
+            label="💾 הורד קובץ נתונים (Excel)",
+            data=excel_file,
+            file_name=f"{st.session_state['selected_stock']}_RawData.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
 
 st.divider()
 st.markdown("""
 <div style='text-align: center; color: #64748b; font-size: 0.85rem; padding-top: 1rem; padding-bottom: 2rem; direction: rtl;'>
-    מודל החיזוי מופעל באמצעות Google TimesFM 1.0. האתר לצורכי מחקר, ועל אחריות המשתמש.<br>
+    מודל החיזוי מופעל באמצעות Google TimesFM 2.5. האתר לצורכי מחקר, ועל אחריות המשתמש.<br>
     לשיתופי פעולה ניתן לפנות ליוצר במייל: <a href="mailto:147590@gmail.com" style="color: #3b82f6; text-decoration: none;" dir="ltr">147590@gmail.com</a>
 </div>
 """, unsafe_allow_html=True)
