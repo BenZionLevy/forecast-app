@@ -69,21 +69,28 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================
-# טעינת מודל AI (נשמר בזיכרון)
+# טעינת מודל AI (נשמר בזיכרון) - עודכן ל-TimesFM 2.5
 # =========================
 @st.cache_resource(show_spinner=False)
 def load_model():
-    return timesfm.TimesFm(
-        hparams=timesfm.TimesFmHparams(
-            backend="cpu",
-            per_core_batch_size=1,
-            horizon_len=128,
-            context_len=1024,
-        ),
-        checkpoint=timesfm.TimesFmCheckpoint(
-            huggingface_repo_id="google/timesfm-1.0-200m-pytorch"
-        ),
+    # קריאה למחלקה החדשה של גרסה 2.5
+    model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
+        "google/timesfm-2.5-200m-pytorch", 
+        torch_compile=False # שים לב: False מומלץ ב-Streamlit כדי למנוע קריסות זיכרון
     )
+    # אובייקט הגדרות חדש שהחליף את הישן
+    model.compile(
+        timesfm.ForecastConfig(
+            max_context=2048, # הכפלנו את זיכרון העבר! (אפשר גם להגדיל ל-4096 אם הנכס מאפשר)
+            max_horizon=128,
+            normalize_inputs=True,
+            use_continuous_quantile_head=True,
+            force_flip_invariance=True,
+            infer_is_positive=True,
+            fix_quantile_crossing=True,
+        )
+    )
+    return model
 
 # =========================
 # נכסים לבחירה וקישורי Yahoo
@@ -191,27 +198,39 @@ def fetch_data(symbol, interval_str):
         
     return df[['close', 'vwap', 'volume']]
 
+# =========================
+# פונקציית החיזוי - הותאמה ל-API החדש של 2.5
+# =========================
 def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=128):
     if "תשואות" not in method:
-        forecast_res, quant_res = model.forecast([ctx_prices], freq=[0])
+        # התחביר החדש והנקי, ללא freq
+        point_fcst, quant_fcst = model.forecast(
+            horizon=horizon, 
+            inputs=[ctx_prices]
+        )
         
-        # אינדקס 1 הוא אחוזון 10, אינדקס 5 הוא החציון (50), ואינדקס -1 הוא אחוזון 90
-        fcst_prices = quant_res[0, :horizon, 5]  # חציון
-        fcst_lower = quant_res[0, :horizon, 1]   # גבול תחתון אמיתי (10%)
-        fcst_upper = quant_res[0, :horizon, -1]  # גבול עליון (90%)
+        # התחזית המרכזית נמצאת כעת במשתנה נפרד
+        fcst_prices = point_fcst[0]
+        # מערך ההסתברויות מכיל את הקצוות ב-0 ובמינוס 1
+        fcst_lower = quant_fcst[0, :, 0]
+        fcst_upper = quant_fcst[0, :, -1]
         
         return fcst_prices, fcst_lower, fcst_upper
     else:
+        # שיטת תשואות: חישוב אחוזי שינוי
         returns = np.diff(ctx_prices) / ctx_prices[:-1]
         returns = np.nan_to_num(returns)
         
-        forecast_res, quant_res = model.forecast([returns], freq=[0])
+        point_fcst, quant_fcst = model.forecast(
+            horizon=horizon, 
+            inputs=[returns]
+        )
         
-        # אותה שליפה מדויקת גם עבור שיטת התשואות
-        fcst_ret = quant_res[0, :horizon, 5]
-        lower_ret = quant_res[0, :horizon, 1]
-        upper_ret = quant_res[0, :horizon, -1]
+        fcst_ret = point_fcst[0]
+        lower_ret = quant_fcst[0, :, 0]
+        upper_ret = quant_fcst[0, :, -1]
         
+        # שחזור התשואות בחזרה למחיר
         last_price = ctx_prices[-1]
         fcst_prices = last_price * np.cumprod(1 + fcst_ret)
         fcst_lower = last_price * np.cumprod(1 + lower_ret)
