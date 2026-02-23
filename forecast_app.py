@@ -73,20 +73,18 @@ st.markdown("""
 # =========================
 @st.cache_resource(show_spinner=False)
 def load_model():
-    # קריאה למחלקה החדשה של גרסה 2.5
     model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
         "google/timesfm-2.5-200m-pytorch", 
-        torch_compile=False # שים לב: False מומלץ ב-Streamlit כדי למנוע קריסות זיכרון
+        torch_compile=False 
     )
-    # אובייקט הגדרות חדש שהחליף את הישן
     model.compile(
         timesfm.ForecastConfig(
-            max_context=2048, # הכפלנו את זיכרון העבר! (אפשר גם להגדיל ל-4096 אם הנכס מאפשר)
+            max_context=2048, 
             max_horizon=128,
             normalize_inputs=True,
             use_continuous_quantile_head=True,
             force_flip_invariance=True,
-            infer_is_positive=True,
+            infer_is_positive=False, # <<< התיקון המצוין: מאפשר סוף סוף תשואות שליליות
             fix_quantile_crossing=True,
         )
     )
@@ -203,21 +201,18 @@ def fetch_data(symbol, interval_str):
 # =========================
 def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=128):
     if "תשואות" not in method:
-        # התחביר החדש והנקי, ללא freq
         point_fcst, quant_fcst = model.forecast(
             horizon=horizon, 
             inputs=[ctx_prices]
         )
         
-        # התחזית המרכזית נמצאת כעת במשתנה נפרד
-        fcst_prices = point_fcst[0]
-        # מערך ההסתברויות מכיל את הקצוות ב-0 ובמינוס 1
-        fcst_lower = quant_fcst[0, :, 0]
+        # אינדקס 5 הוא החציון הממורכז, 1 זה אחוזון 10, ו- (1-) זה אחוזון 90
+        fcst_prices = quant_fcst[0, :, 5]
+        fcst_lower = quant_fcst[0, :, 1]
         fcst_upper = quant_fcst[0, :, -1]
         
         return fcst_prices, fcst_lower, fcst_upper
     else:
-        # שיטת תשואות: חישוב אחוזי שינוי
         returns = np.diff(ctx_prices) / ctx_prices[:-1]
         returns = np.nan_to_num(returns)
         
@@ -226,13 +221,15 @@ def get_forecast(model, ctx_prices, method="שערים גולמיים", horizon=
             inputs=[returns]
         )
         
-        fcst_ret = point_fcst[0]
-        lower_ret = quant_fcst[0, :, 0]
+        # משיכת חציון תשואות ואחוזונים קיצוניים
+        fcst_ret = quant_fcst[0, :, 5]
+        lower_ret = quant_fcst[0, :, 1]
         upper_ret = quant_fcst[0, :, -1]
         
-        # שחזור התשואות בחזרה למחיר
         last_price = ctx_prices[-1]
         fcst_prices = last_price * np.cumprod(1 + fcst_ret)
+        
+        # הערה: ההכפלה המצטברת (cumprod) כאן תייצר מניפת פיזור רחבה מאוד.
         fcst_lower = last_price * np.cumprod(1 + lower_ret)
         fcst_upper = last_price * np.cumprod(1 + upper_ret)
         
